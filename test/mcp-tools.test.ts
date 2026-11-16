@@ -59,13 +59,14 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe('MCP project, tree, and search tools', () => {
+describe('MCP read-only project tools', () => {
   it('advertises the three read-only tools and validated bounded schemas', async () => {
     const { dataRoot } = fixture();
     await withClient(dataRoot, async (client) => {
       const { tools } = await client.listTools();
       expect(tools.map((tool) => tool.name).sort()).toEqual([
-        'memory_get_tree', 'memory_list_projects', 'memory_search',
+        'memory_get_metadata', 'memory_get_tree', 'memory_list_projects',
+        'memory_read', 'memory_read_many', 'memory_search',
       ]);
       expect(tools.every((tool) => tool.annotations?.readOnlyHint === true)).toBe(true);
       const tree = tools.find((tool) => tool.name === 'memory_get_tree');
@@ -75,6 +76,10 @@ describe('MCP project, tree, and search tools', () => {
       expect(search?.inputSchema.properties).toMatchObject({
         mode: { enum: ['path', 'hierarchical', 'fulltext', 'hybrid'] },
         maxResults: { maximum: 100 },
+      });
+      const readMany = tools.find((tool) => tool.name === 'memory_read_many');
+      expect(readMany?.inputSchema.properties).toMatchObject({
+        max_tokens: { maximum: 100_000 },
       });
     });
   });
@@ -197,6 +202,115 @@ describe('MCP project, tree, and search tools', () => {
       expect(result.isError).toBe(true);
       expect(JSON.stringify(result)).not.toContain(dataRoot);
       expect(JSON.stringify(result)).not.toContain(outsideRoot);
+    });
+  });
+
+  it('reads one document and exposes validated metadata without local paths', async () => {
+    const { dataRoot, knowledgeRoot } = fixture();
+    const sourcePath = join(knowledgeRoot, 'security/overview.md');
+    const before = readFileSync(sourcePath);
+    await withClient(dataRoot, async (client) => {
+      const read = await client.callTool({
+        name: 'memory_read',
+        arguments: { project: 'demo', path: 'security/overview.md' },
+      });
+      expect(read.isError).not.toBe(true);
+      expect(read.structuredContent).toMatchObject({
+        document: {
+          path: 'security/overview.md',
+          metadata: { title: 'Security Overview', source_ids: ['source-1'] },
+          body: expect.stringContaining('Authentication'),
+        },
+      });
+      const metadata = await client.callTool({
+        name: 'memory_get_metadata',
+        arguments: { project: 'demo', path: 'security/overview.md' },
+      });
+      expect(metadata.isError).not.toBe(true);
+      expect(metadata.structuredContent).toMatchObject({
+        path: 'security/overview.md',
+        metadata: { title: 'Security Overview', source_ids: ['source-1'] },
+      });
+      expect(JSON.stringify(metadata.structuredContent)).not.toContain('Authentication');
+      expect(JSON.stringify(read.structuredContent)).not.toContain(dataRoot);
+      expect(readFileSync(sourcePath)).toEqual(before);
+    });
+  });
+
+  it('reads many documents in stable order and respects max_tokens', async () => {
+    const { dataRoot, knowledgeRoot } = fixture();
+    const sourcePath = join(knowledgeRoot, 'security/overview.md');
+    const databasePath = resolveProjectDatabasePath(join(dataRoot, 'projects', 'demo'));
+    const sourceBefore = readFileSync(sourcePath);
+    const databaseBefore = readFileSync(databasePath);
+    await withClient(dataRoot, async (client) => {
+      const paths = ['security/overview.md', 'security/deep/secrets.md'];
+      const single = await client.callTool({
+        name: 'memory_read_many',
+        arguments: { project: 'demo', paths: [paths[0]], max_tokens: 100_000 },
+      });
+      const full = await client.callTool({
+        name: 'memory_read_many',
+        arguments: { project: 'demo', paths, max_tokens: 100_000 },
+      });
+      const fullDocuments = (full.structuredContent as {
+        documents: Array<{ path: string }>;
+      }).documents;
+      expect(fullDocuments).toHaveLength(paths.length);
+      expect(fullDocuments.map((document) => document.path)).toEqual(
+        [...fullDocuments.map((document) => document.path)].sort(),
+      );
+      const singleTokens = (single.structuredContent as { consumedTokens: number }).consumedTokens;
+      const fullTokens = (full.structuredContent as { consumedTokens: number }).consumedTokens;
+      const budget = Math.ceil((singleTokens + fullTokens) / 2);
+      const bounded = await client.callTool({
+        name: 'memory_read_many',
+        arguments: { project: 'demo', paths, max_tokens: budget },
+      });
+      expect(bounded.isError).not.toBe(true);
+      const result = bounded.structuredContent as {
+        documents: Array<{ path: string }>;
+        maxTokens: number;
+        consumedTokens: number;
+        omittedCount: number;
+      };
+      expect(result.consumedTokens).toBeLessThanOrEqual(budget);
+      expect(result.documents.length).toBeGreaterThan(0);
+      expect(result.documents.length).toBeLessThan(paths.length);
+      expect(result.documents.map((document) => document.path)).toEqual(
+        [...result.documents.map((document) => document.path)].sort(),
+      );
+      expect(result.maxTokens).toBe(budget);
+      expect(result.omittedCount).toBe(paths.length - result.documents.length);
+
+      const zero = await client.callTool({
+        name: 'memory_read_many',
+        arguments: { project: 'demo', paths, max_tokens: 0 },
+      });
+      expect(zero.structuredContent).toMatchObject({
+        documents: [], consumedTokens: 0, omittedCount: paths.length,
+      });
+      const invalidBudget = await client.callTool({
+        name: 'memory_read_many',
+        arguments: { project: 'demo', paths, max_tokens: 100_001 },
+      });
+      expect(invalidBudget.isError).toBe(true);
+      expect(readFileSync(sourcePath)).toEqual(sourceBefore);
+      expect(readFileSync(databasePath)).toEqual(databaseBefore);
+    });
+  });
+
+  it('rejects unsafe and missing document paths without exposing absolute paths', async () => {
+    const { dataRoot } = fixture();
+    await withClient(dataRoot, async (client) => {
+      for (const path of ['../outside.md', 'C:\\outside.md', 'missing.md']) {
+        const result = await client.callTool({
+          name: 'memory_read',
+          arguments: { project: 'demo', path },
+        });
+        expect(result.isError).toBe(true);
+        expect(JSON.stringify(result)).not.toContain(dataRoot);
+      }
     });
   });
 });
