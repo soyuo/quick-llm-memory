@@ -14,6 +14,7 @@
     "test:retrieval-quality": "vitest run test/retrieval-quality.test.ts"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "^2.4.0",
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^24.19.2",
     "tsup": "^9.0.0",
@@ -24,6 +25,7 @@
     "qlm": "./dist/index.js"
   },
   "dependencies": {
+    "@modelcontextprotocol/server": "^2.4.0",
     "better-sqlite3": "^13.2.0",
     "commander": "^15.1.0",
     "pino": "^10.4.0",
