@@ -24,6 +24,8 @@ export interface RetrievalSearchRequest extends SearchRequest {
   projectRoot: string;
   project: ProjectMetadata;
   ranker?: RetrievalRanker;
+  /** Disable automatic index rebuilding for read-only integrations such as MCP. */
+  synchronizeStaleIndex?: boolean;
 }
 
 export interface SearchResult {
@@ -87,7 +89,13 @@ export function searchProjectDocuments(
     throw new InputError('The retrieval project ID does not match project metadata.');
   }
 
-  return searchIndexedDocuments(request, query, maxDepth, maxResults, true);
+  return searchIndexedDocuments(
+    request,
+    query,
+    maxDepth,
+    maxResults,
+    request.synchronizeStaleIndex !== false,
+  );
 }
 
 function searchIndexedDocuments(
