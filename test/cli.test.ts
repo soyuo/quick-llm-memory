@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { reportCliError, runCli } from '../src/cli.js';
 import { ConfigurationError } from '../src/config/error.js';
 import { InputError, QLM_ERROR_CODES } from '../src/errors/qlm-error.js';
@@ -24,6 +24,24 @@ async function runCommand(args: string[]): Promise<{
 }
 
 describe('CLI', () => {
+  it('launches the TUI when invoked without a subcommand', async () => {
+    const runTui = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const exitCode = await runCli(['node', 'qlm'], {}, { runTui });
+
+    expect(exitCode).toBe(0);
+    expect(runTui).toHaveBeenCalledOnce();
+  });
+
+  it('keeps help and version invocations out of the TUI', async () => {
+    const runTui = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+
+    const output = { writeOut: vi.fn(), writeError: vi.fn() };
+    await runCli(['node', 'qlm', '--help'], output, { runTui });
+    await runCli(['node', 'qlm', '--version'], output, { runTui });
+
+    expect(runTui).not.toHaveBeenCalled();
+  });
+
   it('prints help and exits successfully', async () => {
     const result = await runCommand(['--help']);
 
