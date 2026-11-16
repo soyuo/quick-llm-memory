@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3';
 import { ConfigurationError } from '../config/error.js';
 import type { ProjectMetadata } from '../projects/schema.js';
 
-export const PROJECT_DATABASE_SCHEMA_VERSION = 1;
+export const PROJECT_DATABASE_SCHEMA_VERSION = 2;
 
 export function initializeProjectDatabaseSchema(
   database: Database.Database,
@@ -53,6 +53,38 @@ export function initializeProjectDatabaseSchema(
     }
   }
 
+  if (currentVersion < PROJECT_DATABASE_SCHEMA_VERSION) {
+    const conflictingFtsObjects = database
+      .prepare(`
+        SELECT name
+        FROM sqlite_schema
+        WHERE name = 'document_fts' OR name GLOB 'document_fts_*'
+        ORDER BY name
+      `)
+      .pluck()
+      .all();
+    if (conflictingFtsObjects.length > 0) {
+      throw new ConfigurationError(
+        'The project database contains conflicting full-text index objects; refusing to migrate it.',
+        {
+          filePath: database.name,
+          suggestedAction:
+            'Back up the database and inspect its document_fts objects before retrying the migration.',
+        },
+      );
+    }
+  } else {
+    const ftsSchema = database
+      .prepare("SELECT sql FROM sqlite_schema WHERE name = 'document_fts'")
+      .get() as { sql: string | null } | undefined;
+    if (ftsSchema?.sql === null || !/\bUSING\s+fts5\s*\(/i.test(ftsSchema?.sql ?? '')) {
+      throw new ConfigurationError('The project database has no valid FTS5 index.', {
+        filePath: database.name,
+        suggestedAction: 'Run qlm reindex to rebuild the project database.',
+      });
+    }
+  }
+
   const migrate = database.transaction(() => {
     database.exec(`
       CREATE TABLE IF NOT EXISTS projects (
@@ -94,6 +126,15 @@ export function initializeProjectDatabaseSchema(
         target_id TEXT NOT NULL,
         relation_type TEXT NOT NULL,
         PRIMARY KEY (source_id, target_id, relation_type)
+      );
+
+      CREATE VIRTUAL TABLE IF NOT EXISTS document_fts USING fts5(
+        document_id UNINDEXED,
+        title,
+        path,
+        tags,
+        description,
+        content
       );
     `);
 
