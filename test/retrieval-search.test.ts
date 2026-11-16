@@ -316,7 +316,10 @@ describe('path and hierarchical retrieval', () => {
     const { dataRoot } = createIndexedProject();
     const errorOutput: string[] = [];
     const exitCode = await runCli(
-      ['node', 'qlm', 'search', 'security', '--project', 'demo', '--max-depth', '2'],
+      [
+        'node', 'qlm', 'search', 'security', '--project', 'demo', '--max-depth', '2',
+        '--max-tokens', '100',
+      ],
       {
         writeOut: () => undefined,
         writeError: (text) => errorOutput.push(text),
@@ -331,6 +334,57 @@ describe('path and hierarchical retrieval', () => {
 
     expect(exitCode).toBe(1);
     expect(errorOutput.join('')).toContain('Retrieval limits require an explicit --mode.');
+  });
+
+  it('applies a zero token budget and reports the estimate', async () => {
+    const { dataRoot } = createIndexedProject();
+    const output: string[] = [];
+    const errorOutput: string[] = [];
+    const exitCode = await runCli(
+      [
+        'node', 'qlm', 'search', 'security', '--project', 'demo', '--mode', 'fulltext',
+        '--max-tokens', '0',
+      ],
+      {
+        writeOut: (text) => output.push(text),
+        writeError: (text) => errorOutput.push(text),
+      },
+      {
+        runtimeFactory: () => ({
+          dataRoot,
+          logger: createApplicationLogger({ dataRoot, level: 'fatal' }),
+        }),
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(errorOutput.join('')).toBe('');
+    expect(output.join('')).toContain('Estimated token budget: 0/0; counts are estimates.');
+    expect(output.join('')).toContain('No matching documents fit the token budget.');
+  });
+
+  it('rejects malformed token budgets before retrieval', async () => {
+    const { dataRoot } = createIndexedProject();
+    const errorOutput: string[] = [];
+    const exitCode = await runCli(
+      [
+        'node', 'qlm', 'search', 'security', '--project', 'demo', '--mode', 'path',
+        '--max-tokens', '1.5',
+      ],
+      {
+        writeOut: () => undefined,
+        writeError: (text) => errorOutput.push(text),
+      },
+      {
+        runtimeFactory: () => ({
+          dataRoot,
+          logger: createApplicationLogger({ dataRoot, level: 'fatal' }),
+        }),
+      },
+    );
+
+    expect(exitCode).toBe(1);
+    expect(errorOutput.join('')).toContain('Maximum tokens must be a non-negative integer.');
   });
 });
 
