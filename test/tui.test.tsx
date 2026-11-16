@@ -1,11 +1,23 @@
 import React from 'react';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { render } from 'ink-testing-library';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getTuiLayout, launchTui, TuiApp } from '../src/tui/app.js';
+
+const temporaryRoots: string[] = [];
+
+afterEach(() => {
+  for (const root of temporaryRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 describe('TUI shell', () => {
   it('renders keyboard navigation and selectable screens', async () => {
-    const app = render(<TuiApp columns={120} rows={30} />);
+    const dataRoot = createDataRoot();
+    const app = render(<TuiApp columns={120} rows={30} dataRoot={dataRoot} />);
 
     expect(app.lastFrame()).toContain('› Dashboard [selected]');
     expect(app.lastFrame()).toContain('Navigation');
@@ -18,7 +30,7 @@ describe('TUI shell', () => {
 
     app.stdin.write('\r');
     await flushInkEffects();
-    expect(app.lastFrame()).toContain('Projects screen is not available yet.');
+    expect(app.lastFrame()).toContain('No projects yet.');
 
     app.stdin.write('\u001b');
     await flushInkEffects();
@@ -28,13 +40,13 @@ describe('TUI shell', () => {
   });
 
   it('switches pane focus with Tab', async () => {
-    const app = render(<TuiApp columns={120} rows={30} />);
+    const app = render(<TuiApp columns={120} rows={30} dataRoot={createDataRoot()} />);
 
     await flushInkEffects();
     app.stdin.write('\t');
     await flushInkEffects();
 
-    expect(app.lastFrame()).toContain('Quick LLM Memory [focus]');
+    expect(app.lastFrame()).toContain('Dashboard [focus]');
     expect(app.lastFrame()).toContain('Navigation');
     app.unmount();
   });
@@ -45,18 +57,19 @@ describe('TUI shell', () => {
     expect(getTuiLayout(59, 24)).toBe('too-small');
     expect(getTuiLayout(80, 15)).toBe('too-small');
 
-    const app = render(<TuiApp columns={120} rows={30} />);
+    const dataRoot = createDataRoot();
+    const app = render(<TuiApp columns={120} rows={30} dataRoot={dataRoot} />);
     expect(app.lastFrame()).toContain('Navigation');
-    app.rerender(<TuiApp columns={80} rows={20} />);
+    app.rerender(<TuiApp columns={80} rows={20} dataRoot={dataRoot} />);
     expect(app.lastFrame()).toContain('Projects');
-    app.rerender(<TuiApp columns={50} rows={12} />);
+    app.rerender(<TuiApp columns={50} rows={12} dataRoot={dataRoot} />);
     expect(app.lastFrame()).toContain('minimum is 60x16');
     app.unmount();
   });
 
   it('exits when q is pressed', async () => {
     const onExit = vi.fn();
-    const app = render(<TuiApp onExit={onExit} />);
+    const app = render(<TuiApp onExit={onExit} dataRoot={createDataRoot()} />);
 
     await flushInkEffects();
     app.stdin.write('q');
@@ -76,6 +89,12 @@ describe('TUI shell', () => {
     });
   });
 });
+
+function createDataRoot(): string {
+  const root = mkdtempSync(join(tmpdir(), 'qlm-tui-shell-'));
+  temporaryRoots.push(root);
+  return root;
+}
 
 function flushInkEffects(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
