@@ -81,9 +81,16 @@ describe('qlm tree command', () => {
   });
 
   it('reports empty projects clearly and rejects invalid inputs', async () => {
-    const { dataRoot } = createProject();
+    const { dataRoot, knowledgeRoot } = createProject();
 
     const empty = await run(dataRoot, ['--project', 'demo']);
+    createDocument(knowledgeRoot, 'visible-at-depth-one.md', 'Visible');
+    const hiddenAtDepthZero = await run(dataRoot, [
+      '--project',
+      'demo',
+      '--depth',
+      '0',
+    ]);
     const missing = await run(dataRoot, ['--project', 'missing']);
     const invalidDepth = await run(dataRoot, [
       '--project',
@@ -95,6 +102,10 @@ describe('qlm tree command', () => {
     expect(empty.exitCode).toBe(0);
     expect(empty.output).toBe(
       'Knowledge tree for demo:\nNo knowledge documents or categories found.\n',
+    );
+    expect(hiddenAtDepthZero.exitCode).toBe(0);
+    expect(hiddenAtDepthZero.output).toBe(
+      'Knowledge tree for demo:\nNo categories or documents at depth 0.\n',
     );
     expect(missing.exitCode).toBe(1);
     expect(missing.errorOutput).toContain('[QLM_INPUT_ERROR]');
