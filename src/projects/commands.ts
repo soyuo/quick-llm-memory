@@ -18,6 +18,10 @@ import { OpenAICompatibleProvider } from '../providers/openai-compatible-provide
 import type { AIProvider } from '../providers/provider.js';
 import { searchMarkdownDocuments } from '../markdown/search.js';
 import {
+  searchProjectDocuments,
+  type RetrievalMode,
+} from '../retrieval/search.js';
+import {
   buildKnowledgeTree,
   type CategoryTreeNode,
   type DocumentTreeNode,
@@ -252,13 +256,60 @@ export function registerProjectCommands(
     .command('search <query>')
     .description('Search project Markdown documents')
     .requiredOption('--project <name>', 'Project to search')
-    .action(async (query: string, { project }: { project: string }) => {
+    .option('--mode <mode>', 'Retrieval mode: path or hierarchical')
+    .option('--max-depth <depth>', 'Maximum hierarchy depth')
+    .option('--max-results <count>', 'Maximum number of results')
+    .action(async (
+      query: string,
+      options: {
+        project: string;
+        mode?: string;
+        maxDepth?: string;
+        maxResults?: string;
+      },
+    ) => {
       await withProjectRuntime(runtimeFactory, async ({ dataRoot }) => {
-        const projectName = validateProjectName(project);
-        const exists = listProjects(dataRoot).some(({ name }) => name === projectName);
-        if (!exists) {
+        const projectName = validateProjectName(options.project);
+        const projectMetadata = listProjects(dataRoot).find(
+          ({ name }) => name === projectName,
+        );
+        if (projectMetadata === undefined) {
           throw new InputError(`Project not found: ${projectName}`, {
             suggestedAction: 'Run qlm project list to see initialized projects.',
+          });
+        }
+
+        if (options.mode !== undefined) {
+          const mode = parseRetrievalMode(options.mode);
+          const results = searchProjectDocuments({
+            projectRoot: join(dataRoot, 'projects', projectName),
+            project: projectMetadata,
+            projectId: projectMetadata.id,
+            query,
+            mode,
+            maxDepth: parseOptionalLimit(options.maxDepth, 'Maximum depth'),
+            maxResults: parseOptionalLimit(options.maxResults, 'Maximum results'),
+          });
+          writeOut(`Search results (${mode}) for ${JSON.stringify(query)}:\n`);
+          if (results.length === 0) {
+            writeOut('No matching documents found.\n');
+            return;
+          }
+          for (const result of results) {
+            writeOut(
+              `- ${result.path} — ${result.title}\n` +
+                `  ${result.snippet}\n` +
+                `  Sources: ${result.sourceIds.join(', ') || 'none'}; ` +
+                `sections: ${result.matchedSections.join(', ') || 'none'}; ` +
+                `estimated tokens: ${result.tokenCount}\n`,
+            );
+          }
+          return;
+        }
+
+        if (options.maxDepth !== undefined || options.maxResults !== undefined) {
+          throw new InputError('Retrieval limits require an explicit --mode.', {
+            suggestedAction: 'Use --mode hierarchical with --max-depth, or --mode path with --max-results.',
           });
         }
 
@@ -280,6 +331,26 @@ export function registerProjectCommands(
         }
       });
     });
+}
+
+function parseRetrievalMode(value: string): RetrievalMode {
+  if (value === 'path' || value === 'hierarchical') {
+    return value;
+  }
+  throw new InputError(`Unsupported retrieval mode: ${value}`, {
+    suggestedAction: 'Use --mode path or --mode hierarchical.',
+  });
+}
+
+function parseOptionalLimit(value: string | undefined, description: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const limit = Number(value);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(limit)) {
+    throw new InputError(`${description} must be a non-negative integer.`);
+  }
+  return limit;
 }
 
 function parseTreeDepth(value: string | undefined): number {
