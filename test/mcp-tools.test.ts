@@ -128,6 +128,14 @@ describe('MCP read-only project tools', () => {
       });
       expect(ignoredDepth.isError).toBe(true);
       expect(JSON.stringify(ignoredDepth)).not.toContain(dataRoot);
+      const hybridDepth = await client.callTool({
+        name: 'memory_get_context',
+        arguments: {
+          project: 'demo', query: 'authentication', mode: 'hybrid', max_depth: 2,
+        },
+      });
+      expect(hybridDepth.isError).toBe(true);
+      expect(JSON.stringify(hybridDepth)).not.toContain(dataRoot);
     });
     expect(readFileSync(databasePath)).toEqual(beforeDatabase);
     expect(readFileSync(join(knowledgeRoot, 'security/overview.md'))).toEqual(beforeMarkdown);
