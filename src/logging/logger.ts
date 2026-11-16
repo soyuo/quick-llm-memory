@@ -8,6 +8,7 @@ const SAFE_MESSAGES = new Set([
   'Application started',
   'Project created',
   'Application error',
+  'Project reindexed',
 ]);
 
 const SENSITIVE_FIELDS = new Set([
@@ -78,6 +79,23 @@ export function logProjectCreated(
   projectId: string,
 ): void {
   logger.info({ event: 'project.created', projectId }, 'Project created');
+}
+
+export function logProjectReindexed(
+  logger: pino.Logger,
+  projectId: string,
+  result: { categories: number; documents: number; relations: number },
+): void {
+  logger.info(
+    {
+      event: 'project.reindexed',
+      projectId,
+      categoryCount: result.categories,
+      documentCount: result.documents,
+      relationCount: result.relations,
+    },
+    'Project reindexed',
+  );
 }
 
 export function logApplicationError(
