@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import { InputError } from '../errors/qlm-error.js';
 import { openProjectDatabaseReadOnly } from '../database/database.js';
 import { readStoredMarkdownSource } from '../markdown/repository.js';
+import { extractMarkdownSections } from '../knowledge/markdown-parser.js';
+import type { SourceDocument } from '../knowledge/source.js';
 import type { ProjectMetadata } from '../projects/schema.js';
 import {
   searchProjectDocuments,
@@ -104,9 +106,25 @@ export function buildRetrievalContext(
           sourceIds: [...(stored.document.metadata.source_ids ?? [])],
           sourceSections: [...(stored.document.metadata.source_sections ?? [])],
         };
+        const markdownSource: SourceDocument = {
+          id: candidate.documentId,
+          path: candidate.path,
+          format: 'markdown',
+          content: stored.document.body,
+          hash: currentHash,
+          size: Buffer.byteLength(stored.document.body, 'utf8'),
+          modifiedAt: '',
+          metadata: {},
+        };
+        const sections = extractMarkdownSections(markdownSource);
+        const selectedSections = selectMarkdownSections(sections, request.mode, request.query);
+        const selectedContent = selectedSections
+          .map((section) => section.content.trim())
+          .filter((content) => content.length > 0)
+          .join('\n\n');
         documents.push(reference);
         sources.push(sourceReference);
-        blocks.push(renderDocumentContext(reference, sourceReference, stored.document.body));
+        blocks.push(renderDocumentContext(reference, sourceReference, selectedContent));
       }
     } finally {
       database.close();
@@ -189,6 +207,25 @@ function renderDocumentContext(
   body: string,
 ): string {
   return `${renderDocumentHeader(document, source.sourceIds, source.sourceSections)}${body.trim()}\n`;
+}
+
+function selectMarkdownSections(
+  sections: ReturnType<typeof extractMarkdownSections>,
+  mode: RetrievalSearchRequest['mode'],
+  query: string,
+): typeof sections {
+  if (mode !== 'fulltext' && mode !== 'hybrid') return sections;
+  const terms = [...new Set(
+    (query.toLocaleLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [])
+      .filter((term) => !['and', 'or', 'not', 'near'].includes(term)),
+  )];
+  if (terms.length === 0) return sections;
+  const matchingSections = sections.filter((section) => {
+    const content = section.content.toLocaleLowerCase();
+    return terms.some((term) => content.includes(term));
+  });
+  // A hit may come from its title or path, which has no corresponding body section.
+  return matchingSections.length > 0 ? matchingSections : sections;
 }
 
 function renderDocumentHeader(

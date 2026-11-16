@@ -82,6 +82,29 @@ describe('source-aware retrieval context', () => {
     expect(result.documents[1]?.relatedFrom).toEqual([result.documents[0]?.documentId]);
   });
 
+  it('includes matching Markdown sections without unrelated sections', () => {
+    const { projectRoot, project } = createIndexedProject([
+      '# Relevant Section',
+      'Security guidance applies to production systems.',
+      '',
+      '# Unrelated Section',
+      'Unrelated release notes should not enter this context.',
+    ].join('\n'));
+    const result = buildRetrievalContext({
+      projectRoot,
+      project,
+      projectId: project.id,
+      query: 'security guidance',
+      mode: 'fulltext',
+      maxTokens: 2000,
+    });
+
+    expect(result.context).toContain('Relevant Section');
+    expect(result.context).toContain('Security guidance applies');
+    expect(result.context).not.toContain('Unrelated Section');
+    expect(result.context).not.toContain('Unrelated release notes');
+  });
+
   it('skips an oversized higher-ranked document and continues to a smaller one', () => {
     const { projectRoot, project } = createIndexedProject('x'.repeat(2000));
     const result = buildRetrievalContext({
