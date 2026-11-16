@@ -5,6 +5,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import fs from 'node:fs';
@@ -114,6 +115,85 @@ describe('Markdown document repository', () => {
     );
     expect(readFileSync(moved.sourcePath)).toEqual(originalContents);
     expect(existsSync(created.sourcePath)).toBe(false);
+  });
+
+  it('restores a source that changes while a move is in progress', () => {
+    const knowledgeRoot = createKnowledgeRoot();
+    const created = createMarkdownDocument(
+      knowledgeRoot,
+      'security/authentication.md',
+      createDraft(),
+    );
+    const sourceContents = readFileSync(created.sourcePath, 'utf8');
+    const changedContents = sourceContents.replace(
+      '# Authentication',
+      '# Updated during move',
+    );
+    const originalRenameSync = fs.renameSync;
+    let changedSource = false;
+
+    fs.renameSync = ((oldPath: string, newPath: string) => {
+      if (
+        oldPath === created.sourcePath &&
+        newPath.toString().endsWith('.move') &&
+        !changedSource
+      ) {
+        writeFileSync(created.sourcePath, changedContents, 'utf8');
+        changedSource = true;
+      }
+      originalRenameSync(oldPath, newPath);
+    }) as typeof fs.renameSync;
+    syncBuiltinESMExports();
+
+    try {
+      expect(() =>
+        moveMarkdownDocument(
+          knowledgeRoot,
+          'security/authentication.md',
+          'identity/authentication.md',
+        ),
+      ).toThrow(InternalError);
+      expect(readFileSync(created.sourcePath, 'utf8')).toBe(changedContents);
+      expect(existsSync(join(knowledgeRoot, 'identity', 'authentication.md'))).toBe(
+        false,
+      );
+      expect(
+        readdirSync(join(knowledgeRoot, 'security')).some((name) =>
+          name.endsWith('.move'),
+        ),
+      ).toBe(false);
+    } finally {
+      fs.renameSync = originalRenameSync;
+      syncBuiltinESMExports();
+    }
+  });
+
+  it('rejects symlinked directories without writing outside the knowledge root', (context) => {
+    const knowledgeRoot = createKnowledgeRoot();
+    const outsideDirectory = join(temporaryDirectories[0] ?? '', 'outside');
+    const linkedDirectory = join(knowledgeRoot, 'linked');
+    mkdirSync(knowledgeRoot, { recursive: true });
+    mkdirSync(outsideDirectory);
+
+    try {
+      symlinkSync(
+        outsideDirectory,
+        linkedDirectory,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'EPERM' || code === 'EACCES' || code === 'ENOTSUP') {
+        context.skip('Directory symlinks are unavailable in this environment.');
+        return;
+      }
+      throw error;
+    }
+
+    expect(() =>
+      createMarkdownDocument(knowledgeRoot, 'linked/escape.md', createDraft()),
+    ).toThrow(InputError);
+    expect(existsSync(join(outsideDirectory, 'escape.md'))).toBe(false);
   });
 
   it('rejects traversal paths without writing outside the knowledge root', () => {
