@@ -43,6 +43,16 @@ describe('application logger', () => {
       },
       'Safe metadata event',
     );
+    logger
+      .child({
+        metadata: {
+          request: {
+            systemPrompt: 'private deep prompt',
+            messages: [{ content: 'private nested message' }],
+          },
+        },
+      })
+      .info({ event: 'child.event' }, 'private freeform prompt');
     logProjectCreated(logger, 'project-123');
     logApplicationError(logger, new InputError('private error details'));
 
@@ -51,6 +61,7 @@ describe('application logger', () => {
     expect(records.map((record) => record.event)).toEqual([
       'application.started',
       'safe.metadata',
+      'child.event',
       'project.created',
       'application.error',
     ]);
@@ -59,14 +70,24 @@ describe('application logger', () => {
       apiKey: '[Redacted]',
       nested: { content: '[Redacted]' },
     });
-    expect(records[2].projectId).toBe('project-123');
-    expect(records[3]).toMatchObject({
+    expect(records[2].metadata).toEqual({
+      request: {
+        systemPrompt: '[Redacted]',
+        messages: '[Redacted]',
+      },
+    });
+    expect(records[2].msg).toBe('[Redacted]');
+    expect(records[3].projectId).toBe('project-123');
+    expect(records[4]).toMatchObject({
       errorCode: 'QLM_INPUT_ERROR',
       errorName: 'InputError',
     });
     expect(output.join('')).not.toContain('private prompt text');
     expect(output.join('')).not.toContain('private key');
     expect(output.join('')).not.toContain('private content');
+    expect(output.join('')).not.toContain('private deep prompt');
+    expect(output.join('')).not.toContain('private nested message');
+    expect(output.join('')).not.toContain('private freeform prompt');
     expect(output.join('')).not.toContain('private error details');
     expect(existsSync(join(dataRoot, 'logs'))).toBe(true);
   });
