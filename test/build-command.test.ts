@@ -7,6 +7,12 @@ import { settingsSchema } from '../src/config/schema.js';
 import { resolveProjectDatabasePath } from '../src/database/database.js';
 import { rebuildProjectIndex } from '../src/database/reindex.js';
 import { runCli } from '../src/cli.js';
+import {
+  BUILD_PROGRESS_STAGES,
+  BuildCancelledError,
+  buildProjectKnowledge,
+  type BuildProgressStage,
+} from '../src/knowledge/builder.js';
 import type { HierarchyNode } from '../src/knowledge/planner.js';
 import { loadMarkdownSources } from '../src/knowledge/source.js';
 import { MarkdownDocumentParser } from '../src/knowledge/markdown-parser.js';
@@ -59,6 +65,18 @@ describe('qlm build command', () => {
     expect(result.errorOutput).toBe('');
     expect(result.output).toContain(`Built project demo: 1 source(s), ${parsed.sections.length} section(s), 1 category, 1 document(s); index has 1 document(s).`);
     expect(result.output).toContain('Created: security/authentication.md');
+    expect(progressTransitions(result.output)).toEqual([
+      'queued',
+      'parsing',
+      'planning',
+      'validating',
+      'awaiting_approval',
+      'generating',
+      'verifying',
+      'committing',
+      'indexing',
+      'completed',
+    ]);
     expect(configuredModel).toBe('test-model');
     expect(provider.requests.map(({ schemaName }) => schemaName)).toEqual([
       'qlm_knowledge_hierarchy',
@@ -99,6 +117,7 @@ describe('qlm build command', () => {
 
     expect(result.exitCode).toBe(1);
     expect(result.errorOutput).toContain('[QLM_INPUT_ERROR]');
+    expect(progressTransitions(result.output).at(-1)).toBe('failed');
     expect(readFileSync(existingPath, 'utf8')).toBe(existingMarkdown);
     const database = new Database(resolveProjectDatabasePath(projectRoot), { readonly: true });
     try {
@@ -127,11 +146,64 @@ describe('qlm build command', () => {
     expect(result.errorOutput).toContain('Set ai.model in config.yaml');
     expect(providerCreated).toBe(false);
   });
+
+  it('emits a cancelled terminal event when the injected signal aborts a build', async () => {
+    const { project, projectRoot, knowledgeRoot } = createProject();
+    const sourcePath = createSourceFile();
+    const controller = new AbortController();
+    const events: BuildProgressStage[] = [];
+
+    await expect(
+      buildProjectKnowledge({
+        sourcePath,
+        projectRoot,
+        knowledgeRoot,
+        project,
+        provider: new FakeBuildProvider([]),
+        model: 'test-model',
+        signal: controller.signal,
+        onProgress: ({ stage }) => {
+          events.push(stage);
+          if (stage === 'queued') {
+            controller.abort();
+          }
+        },
+      }),
+    ).rejects.toBeInstanceOf(BuildCancelledError);
+
+    expect(events).toEqual(['queued', 'cancelled']);
+    expect(existsSync(knowledgeRoot)).toBe(false);
+    expect(existsSync(resolveProjectDatabasePath(projectRoot))).toBe(false);
+  });
+
+  it('turns Ctrl+C into a cancelled CLI state without reporting completion', async () => {
+    const { dataRoot, knowledgeRoot, projectRoot } = createProject();
+    const sourcePath = createSourceFile();
+    const provider = new FakeBuildProvider([]);
+    const result = await runBuild(dataRoot, sourcePath, {
+      settings: settingsSchema.parse({ ai: { model: 'test-model' } }),
+      providerFactory: () => provider,
+      writeOutObserver: (text) => {
+        if (text === 'Progress: planning\n') {
+          process.emit('SIGINT');
+        }
+      },
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.output).toContain('Progress: cancelled');
+    expect(result.output).not.toContain('Progress: completed');
+    expect(result.errorOutput).toContain('[QLM_CANCELLED]');
+    expect(provider.requests).toHaveLength(0);
+    expect(existsSync(knowledgeRoot)).toBe(false);
+    expect(existsSync(resolveProjectDatabasePath(projectRoot))).toBe(false);
+  });
 });
 
 interface BuildRuntimeOptions {
   settings: ReturnType<typeof settingsSchema.parse>;
   providerFactory: (settings: ReturnType<typeof settingsSchema.parse>) => AIProvider;
+  writeOutObserver?: (text: string) => void;
 }
 
 async function runBuild(
@@ -144,7 +216,10 @@ async function runBuild(
   const exitCode = await runCli(
     ['node', 'qlm', 'build', '--project', 'demo', sourcePath],
     {
-      writeOut: (text) => output.push(text),
+      writeOut: (text) => {
+        output.push(text);
+        options.writeOutObserver?.(text);
+      },
       writeError: (text) => errorOutput.push(text),
     },
     {
@@ -177,6 +252,17 @@ function createSourceFile(): string {
     'utf8',
   );
   return sourcePath;
+}
+
+function progressTransitions(output: string): BuildProgressStage[] {
+  const stages = output
+    .split('\n')
+    .filter((line) => line.startsWith('Progress: '))
+    .map((line) => line.slice('Progress: '.length).split(/[ (:]/u)[0])
+    .filter((stage): stage is BuildProgressStage =>
+      BUILD_PROGRESS_STAGES.includes(stage as BuildProgressStage),
+    );
+  return stages.filter((stage, index) => stage !== stages[index - 1]);
 }
 
 function createHierarchy(sectionIds: string[]): HierarchyNode[] {
