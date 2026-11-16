@@ -7,6 +7,7 @@ import {
 import { packageMetadata } from '../package-metadata.js';
 import { resolveSettingsPaths } from '../config/paths.js';
 import { registerMcpTools } from './tools.js';
+import { registerMcpResources } from './resources.js';
 
 export interface ServeMcpStdioOptions {
   transport?: ServeStdioOptions['transport'];
@@ -22,9 +23,9 @@ export function createMcpServer(options: CreateMcpServerOptions = {}): McpServer
     name: 'quick-llm-memory',
     version: packageMetadata.version,
   });
-  registerMcpTools(server, {
-    dataRoot: options.dataRoot ?? resolveSettingsPaths().dataRoot,
-  });
+  const dataRoot = options.dataRoot ?? resolveSettingsPaths().dataRoot;
+  registerMcpTools(server, { dataRoot });
+  registerMcpResources(server, { dataRoot });
   return server;
 }
 
