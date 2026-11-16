@@ -12,6 +12,12 @@ import {
   type ApplicationLogger,
 } from '../logging/logger.js';
 import { validateInternalLinks } from '../markdown/link-validator.js';
+import {
+  buildKnowledgeTree,
+  type CategoryTreeNode,
+  type DocumentTreeNode,
+  type KnowledgeTree,
+} from '../markdown/tree.js';
 import { initializeProject, listProjects } from './manager.js';
 import { validateProjectName } from './schema.js';
 
@@ -126,6 +132,80 @@ export function registerProjectCommands(
         );
       });
     });
+
+  cli
+    .command('tree')
+    .description('Browse a project knowledge tree')
+    .requiredOption('--project <name>', 'Project to browse')
+    .option('--depth <number>', 'Maximum depth to display (default: 5)')
+    .action(async ({ project, depth }: { project: string; depth?: string }) => {
+      await withProjectRuntime(runtimeFactory, async ({ dataRoot }) => {
+        const projectName = validateProjectName(project);
+        const exists = listProjects(dataRoot).some(({ name }) => name === projectName);
+        if (!exists) {
+          throw new InputError(`Project not found: ${projectName}`, {
+            suggestedAction: 'Run qlm project list to see initialized projects.',
+          });
+        }
+
+        const maximumDepth = parseTreeDepth(depth);
+        const knowledgeRoot = join(
+          dataRoot,
+          'projects',
+          projectName,
+          'knowledge',
+        );
+        const tree = buildKnowledgeTree(knowledgeRoot);
+        const entries = renderKnowledgeTree(tree, maximumDepth);
+        writeOut(`Knowledge tree for ${projectName}:\n`);
+        writeOut(
+          entries.length === 0
+            ? 'No knowledge documents or categories found.\n'
+            : `${entries.join('\n')}\n`,
+        );
+      });
+    });
+}
+
+function parseTreeDepth(value: string | undefined): number {
+  if (value === undefined) {
+    return 5;
+  }
+
+  const depth = Number(value);
+  if (!Number.isInteger(depth) || depth < 0) {
+    throw new InputError('Tree depth must be a non-negative integer.', {
+      suggestedAction: 'Use --depth with a whole number of 0 or greater.',
+    });
+  }
+
+  return depth;
+}
+
+function renderKnowledgeTree(tree: KnowledgeTree, maximumDepth: number): string[] {
+  const lines: string[] = [];
+  const visit = (
+    categories: CategoryTreeNode[],
+    documents: DocumentTreeNode[],
+  ): void => {
+    for (const category of categories) {
+      if (category.depth > maximumDepth) {
+        continue;
+      }
+
+      lines.push(`${'  '.repeat(category.depth - 1)}${category.path}/`);
+      visit(category.categories, category.documents);
+    }
+
+    for (const document of documents) {
+      if (document.depth <= maximumDepth) {
+        lines.push(`${'  '.repeat(document.depth - 1)}${document.path}`);
+      }
+    }
+  };
+
+  visit(tree.categories, tree.documents);
+  return lines;
 }
 
 function createProjectRuntime(): ProjectCommandRuntime {
