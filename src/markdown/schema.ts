@@ -37,7 +37,9 @@ export const documentDraftFrontmatterSchema = documentFrontmatterSchema.omit({
 
 export const categoryIndexFrontmatterSchema = z
   .object({
-    ...frontmatterBaseSchema,
+    id: z.string().min(1),
+    title: z.string().min(1),
+    depth: z.number().int().min(0),
     type: z.literal('category-index'),
   })
   .strict();
