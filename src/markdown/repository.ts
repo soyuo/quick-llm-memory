@@ -97,6 +97,15 @@ export function readStoredMarkdownSource(
   knowledgeRoot: string,
   relativePath: string,
 ) {
+  const stored = readStoredMarkdownResource(knowledgeRoot, relativePath);
+  assertRegularDocument(stored.document, stored.document.sourcePath);
+  return stored;
+}
+
+export function readStoredMarkdownResource(
+  knowledgeRoot: string,
+  relativePath: string,
+) {
   const root = ensureKnowledgeRoot(knowledgeRoot, false);
   const filePath = resolveDocumentPath(root, relativePath);
   assertNoSymlinkComponents(root, filePath);
@@ -113,7 +122,6 @@ export function readStoredMarkdownSource(
   }
 
   const parsed = parseMarkdownDocument(markdown, filePath);
-  assertRegularDocument(parsed, filePath);
   return { document: parsed, sourceText: markdown };
 }
 
