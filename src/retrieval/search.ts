@@ -16,6 +16,8 @@ export interface SearchRequest {
   mode: RetrievalMode;
   maxResults?: number;
   maxDepth?: number;
+  includeRelated?: boolean;
+  maxRelatedResults?: number;
 }
 
 export interface RetrievalSearchRequest extends SearchRequest {
@@ -34,6 +36,7 @@ export interface SearchResult {
   sourceIds: string[];
   matchedSections: string[];
   tokenCount: number;
+  relatedFrom?: string[];
 }
 
 export type RetrievalSearchResult = SearchResult;
@@ -41,6 +44,8 @@ export type RetrievalSearchResult = SearchResult;
 const DEFAULT_MAX_RESULTS = 10;
 const MAX_MAX_RESULTS = 100;
 const DEFAULT_MAX_DEPTH = 5;
+const DEFAULT_MAX_RELATED_RESULTS = 5;
+const MAX_RELATED_RESULTS = 20;
 const MAX_SNIPPET_LENGTH = 160;
 
 export function searchProjectDocuments(
@@ -56,6 +61,19 @@ export function searchProjectDocuments(
     throw new InputError(`maxResults must not exceed ${MAX_MAX_RESULTS}.`, {
       suggestedAction: `Choose a value between 0 and ${MAX_MAX_RESULTS}.`,
     });
+  }
+  const maxRelatedResults = validateLimit(
+    request.maxRelatedResults,
+    DEFAULT_MAX_RELATED_RESULTS,
+    'maxRelatedResults',
+  );
+  if (maxRelatedResults > MAX_RELATED_RESULTS) {
+    throw new InputError(`maxRelatedResults must not exceed ${MAX_RELATED_RESULTS}.`, {
+      suggestedAction: `Choose a value between 0 and ${MAX_RELATED_RESULTS}.`,
+    });
+  }
+  if (request.maxRelatedResults !== undefined && request.includeRelated !== true) {
+    throw new InputError('maxRelatedResults requires includeRelated.');
   }
   const maxDepth = validateLimit(request.maxDepth, DEFAULT_MAX_DEPTH, 'maxDepth');
   if (request.maxDepth !== undefined && request.mode !== 'hierarchical') {
@@ -157,7 +175,102 @@ function searchIndexedDocuments(
     return searchIndexedDocuments(request, query, maxDepth, maxResults, false);
   }
   const ranker = request.ranker ?? reciprocalRankFusionRanker;
-  return ranker.rank(rankedSources, maxResults).slice(0, maxResults);
+  const primaryResults = ranker.rank(rankedSources, maxResults).slice(0, maxResults);
+  return request.includeRelated === true
+    ? appendRelatedResults(
+      request,
+      primaryResults,
+      request.maxRelatedResults ?? DEFAULT_MAX_RELATED_RESULTS,
+    )
+    : primaryResults;
+}
+
+function appendRelatedResults(
+  request: RetrievalSearchRequest,
+  primaryResults: RetrievalSearchResult[],
+  maxRelatedResults: number,
+): RetrievalSearchResult[] {
+  if (primaryResults.length === 0 || maxRelatedResults === 0) {
+    return primaryResults;
+  }
+
+  const primaryIds = primaryResults.map(({ documentId }) => documentId);
+  const placeholders = primaryIds.map(() => '?').join(', ');
+  const primaryById = new Map(primaryResults.map((result) => [result.documentId, result]));
+  const database = openProjectDatabaseReadOnly(request.projectRoot, request.project);
+  try {
+    const existingLinks = database.prepare(`
+      SELECT source_id AS sourceId, target_id AS targetId
+      FROM document_relations
+      WHERE relation_type = 'related'
+        AND source_id IN (${placeholders})
+        AND target_id IN (${placeholders})
+      ORDER BY target_id COLLATE BINARY, source_id COLLATE BINARY
+    `).all(...primaryIds, ...primaryIds) as Array<{ sourceId: string; targetId: string }>;
+    for (const link of existingLinks) {
+      const target = primaryById.get(link.targetId);
+      if (target !== undefined) {
+        target.relatedFrom = [...new Set([...(target.relatedFrom ?? []), link.sourceId])];
+      }
+    }
+
+    const relatedRows = database.prepare(`
+      SELECT DISTINCT target.id, target.path, target.content_hash AS contentHash
+      FROM document_relations AS relation
+      JOIN documents AS target ON target.id = relation.target_id
+      WHERE relation.relation_type = 'related'
+        AND relation.source_id IN (${placeholders})
+        AND target.project_id = ?
+        AND target.id NOT IN (${placeholders})
+      ORDER BY target.path COLLATE BINARY, target.id COLLATE BINARY
+      LIMIT ?
+    `).all(...primaryIds, request.project.id, ...primaryIds, maxRelatedResults) as IndexedDocumentRow[];
+
+    const relatedResults = relatedRows.map((row) => {
+      const sourceIds = database.prepare(`
+        SELECT source_id AS sourceId
+        FROM document_relations
+        WHERE relation_type = 'related'
+          AND target_id = ?
+          AND source_id IN (${placeholders})
+        ORDER BY source_id COLLATE BINARY
+      `).all(row.id, ...primaryIds) as Array<{ sourceId: string }>;
+      return createRelatedSearchResult(request.projectRoot, row, sourceIds.map(({ sourceId }) => sourceId));
+    });
+    return [...primaryResults, ...relatedResults];
+  } finally {
+    database.close();
+  }
+}
+
+function createRelatedSearchResult(
+  projectRoot: string,
+  row: IndexedDocumentRow,
+  relatedFrom: string[],
+): RetrievalSearchResult {
+  const source = readStoredMarkdownSource(joinKnowledgeRoot(projectRoot), row.path);
+  const document = source.document;
+  const contentHash = createHash('sha256').update(source.sourceText).digest('hex');
+  if (
+    document.metadata.type !== 'document' || document.metadata.id !== row.id ||
+    contentHash !== row.contentHash
+  ) {
+    throw staleIndexError(row.path);
+  }
+  const content = document.body.replace(/\s+/g, ' ').trim();
+  return {
+    documentId: row.id,
+    path: row.path,
+    title: document.metadata.title,
+    snippet: content.length <= MAX_SNIPPET_LENGTH
+      ? content
+      : `${content.slice(0, MAX_SNIPPET_LENGTH - 3).trimEnd()}...`,
+    score: 0,
+    sourceIds: [...(document.metadata.source_ids ?? [])],
+    matchedSections: [...(document.metadata.source_sections ?? [])],
+    tokenCount: Math.max(1, Math.ceil(document.body.length / 4)),
+    relatedFrom,
+  };
 }
 
 interface CandidateRows {

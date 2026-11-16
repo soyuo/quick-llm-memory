@@ -259,6 +259,8 @@ export function registerProjectCommands(
     .option('--mode <mode>', 'Retrieval mode: path, hierarchical, fulltext, or hybrid')
     .option('--max-depth <depth>', 'Maximum hierarchy depth')
     .option('--max-results <count>', 'Maximum number of results')
+    .option('--include-related', 'Include directly related documents (default limit: 5)')
+    .option('--max-related-results <count>', 'Maximum related documents to add (0-20)')
     .action(async (
       query: string,
       options: {
@@ -266,6 +268,8 @@ export function registerProjectCommands(
         mode?: string;
         maxDepth?: string;
         maxResults?: string;
+        includeRelated?: boolean;
+        maxRelatedResults?: string;
       },
     ) => {
       await withProjectRuntime(runtimeFactory, async ({ dataRoot }) => {
@@ -294,6 +298,11 @@ export function registerProjectCommands(
             mode,
             maxDepth: parseOptionalLimit(options.maxDepth, 'Maximum depth'),
             maxResults: parseOptionalLimit(options.maxResults, 'Maximum results'),
+            includeRelated: options.includeRelated,
+            maxRelatedResults: parseOptionalLimit(
+              options.maxRelatedResults,
+              'Maximum related results',
+            ),
           });
           writeOut(`Search results (${mode}) for ${JSON.stringify(query)}:\n`);
           if (results.length === 0) {
@@ -306,15 +315,21 @@ export function registerProjectCommands(
                 `  ${result.snippet}\n` +
                 `  Sources: ${result.sourceIds.join(', ') || 'none'}; ` +
                 `sections: ${result.matchedSections.join(', ') || 'none'}; ` +
-                `estimated tokens: ${result.tokenCount}\n`,
+                `estimated tokens: ${result.tokenCount}\n` +
+                (result.relatedFrom === undefined
+                  ? ''
+                  : `  Related to: ${result.relatedFrom.join(', ')}\n`),
             );
           }
           return;
         }
 
-        if (options.maxDepth !== undefined || options.maxResults !== undefined) {
+        if (
+          options.maxDepth !== undefined || options.maxResults !== undefined ||
+          options.includeRelated === true || options.maxRelatedResults !== undefined
+        ) {
           throw new InputError('Retrieval limits require an explicit --mode.', {
-            suggestedAction: 'Use --mode hierarchical with --max-depth, or --mode path with --max-results.',
+            suggestedAction: 'Use an explicit --mode with retrieval limits or related-document options.',
           });
         }
 
