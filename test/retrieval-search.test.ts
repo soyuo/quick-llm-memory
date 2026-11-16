@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ConfigurationError } from '../src/config/error.js';
 import { InputError } from '../src/errors/qlm-error.js';
-import { resolveProjectDatabasePath } from '../src/database/database.js';
+import { openProjectDatabase, resolveProjectDatabasePath } from '../src/database/database.js';
 import { rebuildProjectIndex } from '../src/database/reindex.js';
 import { runCli } from '../src/cli.js';
 import { createApplicationLogger } from '../src/logging/logger.js';
@@ -334,6 +334,186 @@ describe('path and hierarchical retrieval', () => {
   });
 });
 
+describe('related-document expansion', () => {
+  it('ignores dangling relation targets', () => {
+    const { projectRoot, project } = createIndexedProject();
+    const ids = getDocumentIds(projectRoot, project);
+    addRelations(projectRoot, project, [[
+      ids['security/overview.md']!,
+      'missing-document-id',
+    ]]);
+
+    const results = searchProjectDocuments({
+      projectRoot,
+      project,
+      projectId: project.id,
+      query: 'security/overview.md',
+      mode: 'path',
+      includeRelated: true,
+    });
+
+    expect(results.map(({ path }) => path)).toEqual(['security/overview.md']);
+  });
+
+  it('does not return targets belonging to another project', () => {
+    const { dataRoot, projectRoot, project } = createIndexedProject();
+    const foreignProject = initializeProject(dataRoot, 'foreign');
+    const ids = getDocumentIds(projectRoot, project);
+    const database = openProjectDatabase(projectRoot, project);
+    try {
+      database.prepare(`
+        INSERT INTO projects (id, name, root_path, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(
+        foreignProject.id,
+        foreignProject.name,
+        join(dataRoot, 'projects', foreignProject.name),
+        foreignProject.created_at,
+        foreignProject.updated_at,
+      );
+      database.prepare(`
+        INSERT INTO documents (
+          id, project_id, path, title, category_id, depth, content_hash,
+          status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, NULL, 1, ?, 'draft', ?, ?)
+      `).run(
+        'foreign-document-id', foreignProject.id, 'foreign.md', 'Foreign',
+        'unused-hash', foreignProject.created_at, foreignProject.updated_at,
+      );
+      database.prepare(`
+        INSERT INTO document_relations (source_id, target_id, relation_type)
+        VALUES (?, ?, 'related')
+      `).run(ids['security/overview.md'], 'foreign-document-id');
+    } finally {
+      database.close();
+    }
+
+    const results = searchProjectDocuments({
+      projectRoot,
+      project,
+      projectId: project.id,
+      query: 'security/overview.md',
+      mode: 'path',
+      includeRelated: true,
+    });
+    expect(results.map(({ path }) => path)).toEqual(['security/overview.md']);
+  });
+
+  it('is opt-in and adds only one-hop targets with merged provenance', () => {
+    const { projectRoot, project } = createIndexedProject();
+    const ids = getDocumentIds(projectRoot, project);
+    addRelations(projectRoot, project, [
+      [ids['security/overview.md']!, ids['other/note.md']!],
+      [ids['security/vm/create.md']!, ids['other/note.md']!],
+      [ids['security/overview.md']!, ids['security/vm/create.md']!],
+      [ids['other/note.md']!, ids['root.md']!],
+    ]);
+    const databasePath = resolveProjectDatabasePath(projectRoot);
+    const before = readFileSync(databasePath);
+    const base = {
+      projectRoot,
+      project,
+      projectId: project.id,
+      query: 'security',
+      mode: 'hierarchical' as const,
+    };
+
+    const primary = searchProjectDocuments(base);
+    expect(primary.map(({ path }) => path)).toEqual([
+      'security/overview.md',
+      'security/vm/create.md',
+    ]);
+    expect(primary.every(({ relatedFrom }) => relatedFrom === undefined)).toBe(true);
+
+    const expanded = searchProjectDocuments({ ...base, includeRelated: true });
+    expect(expanded.map(({ path }) => path)).toEqual([
+      'security/overview.md',
+      'security/vm/create.md',
+      'other/note.md',
+    ]);
+    expect(expanded[1]?.relatedFrom).toEqual([ids['security/overview.md']]);
+    expect(expanded[2]?.relatedFrom).toEqual([
+      ids['security/overview.md'],
+      ids['security/vm/create.md'],
+    ].sort());
+    expect(readFileSync(databasePath)).toEqual(before);
+  });
+
+  it('sorts and bounds related additions deterministically', () => {
+    const { projectRoot, knowledgeRoot, project } = createIndexedProject();
+    const targetIds: string[] = [];
+    for (let index = 0; index < 6; index += 1) {
+      const created = createMarkdownDocument(knowledgeRoot, `related/item-${index}.md`, {
+        metadata: {
+          schema_version: 1,
+          title: `Related ${index}`,
+          type: 'document',
+          depth: 2,
+          status: 'draft',
+        },
+        body: `\nRelated document ${index}.\n`,
+      });
+      targetIds.push(created.metadata.id);
+    }
+    rebuildProjectIndex(projectRoot, project);
+    const ids = getDocumentIds(projectRoot, project);
+    addRelations(projectRoot, project, targetIds.map((targetId) => [
+      ids['security/overview.md']!, targetId,
+    ]));
+    const base = {
+      projectRoot,
+      project,
+      projectId: project.id,
+      query: 'security/overview.md',
+      mode: 'path',
+      includeRelated: true,
+    } as const;
+    const results = searchProjectDocuments(base);
+    expect(results.slice(1).map(({ path }) => path)).toEqual([
+      'related/item-0.md',
+      'related/item-1.md',
+      'related/item-2.md',
+      'related/item-3.md',
+      'related/item-4.md',
+    ]);
+    const maximum = searchProjectDocuments({
+      ...base,
+      maxRelatedResults: 20,
+    });
+    expect(maximum).toHaveLength(7);
+
+    expect(() => searchProjectDocuments({
+      ...base,
+      maxRelatedResults: 21,
+    })).toThrow(InputError);
+  });
+
+  it('renders related paths with a clear CLI separator and source link', async () => {
+    const { dataRoot, projectRoot, project } = createIndexedProject();
+    const ids = getDocumentIds(projectRoot, project);
+    addRelations(projectRoot, project, [[ids['security/overview.md']!, ids['other/note.md']!]]);
+    const output: string[] = [];
+    const exitCode = await runCli(
+      [
+        'node', 'qlm', 'search', 'security/overview.md', '--project', 'demo',
+        '--mode', 'path', '--include-related',
+      ],
+      { writeOut: (text) => output.push(text), writeError: () => undefined },
+      {
+        runtimeFactory: () => ({
+          dataRoot,
+          logger: createApplicationLogger({ dataRoot, level: 'fatal' }),
+        }),
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(output.join('')).toContain('- security/overview.md — Security Overview\n');
+    expect(output.join('')).toContain(`Related to: ${ids['security/overview.md']}`);
+    expect(output.join('')).toContain('- other/note.md — Other Note\n');
+  });
+});
+
 describe('SQLite full-text retrieval', () => {
   it('searches title, path, tags, description, and body in stable order', () => {
     const { projectRoot, knowledgeRoot, project } = createIndexedProject();
@@ -520,4 +700,38 @@ function createIndexedProject(index = true) {
     rebuildProjectIndex(projectRoot, project);
   }
   return { dataRoot, projectRoot, knowledgeRoot, project };
+}
+
+function getDocumentIds(projectRoot: string, project: ReturnType<typeof initializeProject>) {
+  const database = openProjectDatabase(projectRoot, project);
+  try {
+    return Object.fromEntries(
+      database.prepare('SELECT path, id FROM documents ORDER BY path').all()
+        .map((row) => {
+          const document = row as { path: string; id: string };
+          return [document.path, document.id];
+        }),
+    ) as Record<string, string>;
+  } finally {
+    database.close();
+  }
+}
+
+function addRelations(
+  projectRoot: string,
+  project: ReturnType<typeof initializeProject>,
+  relations: Array<[string, string]>,
+) {
+  const database = openProjectDatabase(projectRoot, project);
+  try {
+    const insert = database.prepare(`
+      INSERT OR IGNORE INTO document_relations (source_id, target_id, relation_type)
+      VALUES (?, ?, 'related')
+    `);
+    for (const [sourceId, targetId] of relations) {
+      insert.run(sourceId, targetId);
+    }
+  } finally {
+    database.close();
+  }
 }
