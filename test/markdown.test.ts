@@ -27,8 +27,21 @@ describe('parseMarkdownDocument', () => {
       'type: document',
       'depth: 2',
       'status: verified',
+      'category: security',
       'tags:',
       '  - security',
+      'source_ids:',
+      '  - source-001',
+      'source_sections:',
+      '  - source-001:section-12',
+      'related:',
+      '  - security.authorization',
+      'created_at: 2026-11-16T00:00:00Z',
+      'updated_at: 2026-11-16T00:00:00Z',
+      'generation:',
+      '  provider: openai',
+      '  model: configured-model',
+      '  revision: 1',
       '---',
     ].join('\n') + body;
 
@@ -41,7 +54,18 @@ describe('parseMarkdownDocument', () => {
       type: 'document',
       depth: 2,
       status: 'verified',
+      category: 'security',
       tags: ['security'],
+      source_ids: ['source-001'],
+      source_sections: ['source-001:section-12'],
+      related: ['security.authorization'],
+      created_at: '2026-11-16T00:00:00Z',
+      updated_at: '2026-11-16T00:00:00Z',
+      generation: {
+        provider: 'openai',
+        model: 'configured-model',
+        revision: 1,
+      },
     });
     expect(parsed.body).toBe(body);
     expect(parsed.sourcePath).toBe('knowledge/security/authentication.md');
@@ -69,7 +93,7 @@ describe('parseMarkdownDocument', () => {
     const filePath = join(directory, 'note.md');
     writeFileSync(
       filePath,
-      '---\nschema_version: 1\nid: note\ntitle: Note\ntype: document\ndepth: 0\nstatus: draft\n---\nText\n',
+      '---\nschema_version: 1\nid: note\ntitle: Note\ntype: document\ndepth: 1\nstatus: draft\n---\nText\n',
     );
 
     const parsed = readMarkdownDocument(filePath);
@@ -111,6 +135,21 @@ describe('parseMarkdownDocument', () => {
       'invalid required value',
       '---\nschema_version: 1\nid: x\ntitle: X\ntype: document\ndepth: deep\nstatus: draft\n---\n',
       /depth/,
+    ],
+    [
+      'depth below SPEC minimum',
+      '---\nschema_version: 1\nid: x\ntitle: X\ntype: document\ndepth: 0\nstatus: draft\n---\n',
+      /depth/,
+    ],
+    [
+      'malformed optional tags',
+      '---\nschema_version: 1\nid: x\ntitle: X\ntype: document\ndepth: 1\nstatus: draft\ntags: 42\n---\n',
+      /tags/,
+    ],
+    [
+      'malformed optional generation metadata',
+      '---\nschema_version: 1\nid: x\ntitle: X\ntype: document\ndepth: 1\nstatus: draft\ngeneration: nope\n---\n',
+      /generation/,
     ],
   ])('rejects %s with source path', (_case, source, message) => {
     expect(() => parseMarkdownDocument(source, 'invalid.md')).toThrow(
