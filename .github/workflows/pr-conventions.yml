@@ -1,0 +1,54 @@
+name: Pull request conventions
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  validate:
+    name: Validate names and commit messages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check branch, pull request title, and commits
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const branchPattern = /^(feature|refactor|fix|docs|test|chore)\/[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*$/;
+            const changeTypes = '(feat|fix|refactor|docs|test|chore)';
+            const scopes = '(project|knowledge|retrieval|storage|provider|mcp|tui|cli|config|security|backup|logging|test|ci|release|docs)';
+            const titlePattern = new RegExp(`^${changeTypes}\\(${scopes}\\): [^\\s].*$`);
+            const commitPattern = titlePattern;
+            const pullRequest = context.payload.pull_request;
+            const errors = [];
+
+            if (!branchPattern.test(pullRequest.head.ref)) {
+              errors.push(`Branch name "${pullRequest.head.ref}" must match type/<issue-number>-<short-kebab-case-description>.`);
+            }
+
+            if (!titlePattern.test(pullRequest.title)) {
+              errors.push(`Pull request title "${pullRequest.title}" must match type(scope): Summary, using an allowed type and SPEC scope.`);
+            }
+
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pullRequest.number,
+              per_page: 100,
+            });
+
+            for (const commit of commits) {
+              const subject = commit.commit.message.split('\n', 1)[0];
+              if (!commitPattern.test(subject)) {
+                errors.push(`Commit "${subject}" must match type(scope): Summary, using an allowed type and SPEC scope.`);
+              }
+            }
+
+            if (errors.length > 0) {
+              core.setFailed(errors.join('\n'));
+            } else {
+              core.info(`Validated branch, pull request title, and ${commits.length} commit(s).`);
+            }
