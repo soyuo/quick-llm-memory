@@ -10,7 +10,7 @@ import { runCli } from '../src/cli.js';
 import { createApplicationLogger } from '../src/logging/logger.js';
 import { createMarkdownDocument } from '../src/markdown/repository.js';
 import { initializeProject } from '../src/projects/manager.js';
-import { RRF_K } from '../src/retrieval/ranker.js';
+import { reciprocalRankFusionRanker, RRF_K } from '../src/retrieval/ranker.js';
 import { searchProjectDocuments } from '../src/retrieval/search.js';
 
 const temporaryDirectories: string[] = [];
@@ -116,6 +116,32 @@ describe('path and hierarchical retrieval', () => {
     expect(results[0]?.matchedSections).toEqual(['source-2:section-1']);
   });
 
+  it('keeps full-text candidates for path-shaped hybrid queries', () => {
+    const { projectRoot, knowledgeRoot, project } = createIndexedProject();
+    createMarkdownDocument(knowledgeRoot, 'other/related.md', {
+      metadata: {
+        schema_version: 1,
+        title: 'Related Notes',
+        type: 'document',
+        depth: 2,
+        status: 'draft',
+      },
+      body: '\nSee the overview before review.\n',
+    });
+    rebuildProjectIndex(projectRoot, project);
+
+    const results = searchProjectDocuments({
+      projectRoot,
+      project,
+      projectId: project.id,
+      query: 'security/overview.md',
+      mode: 'hybrid',
+    });
+
+    expect(results.map(({ path }) => path)).toContain('security/overview.md');
+    expect(results.map(({ path }) => path)).toContain('other/related.md');
+  });
+
   it('lets a replaceable ranker receive exact-path candidates', () => {
     const { projectRoot, project } = createIndexedProject();
     let receivedModes: string[] = [];
@@ -127,15 +153,17 @@ describe('path and hierarchical retrieval', () => {
       query: 'security/overview.md',
       mode: 'hybrid',
       ranker: {
-        rank(sources) {
+        rank(sources, maxResults) {
           receivedModes = sources.map(({ mode }) => mode);
-          return sources.flatMap(({ results: sourceResults }) => [...sourceResults]);
+          return reciprocalRankFusionRanker.rank(sources, maxResults);
         },
       },
     });
 
-    expect(receivedModes).toEqual(['path', 'hierarchical']);
-    expect(results.map(({ path }) => path)).toEqual(['security/overview.md']);
+    expect(receivedModes).toEqual(['path', 'hierarchical', 'fulltext']);
+    const paths = results.map(({ path }) => path);
+    expect(paths).toEqual(['security/overview.md', 'security/vm/create.md']);
+    expect(new Set(paths).size).toBe(paths.length);
   });
 
   it('passes hierarchy and full-text sources to a ranker and applies its limit afterward', () => {
