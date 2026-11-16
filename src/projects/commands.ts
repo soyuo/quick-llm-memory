@@ -25,7 +25,10 @@ import {
 } from '../markdown/tree.js';
 import { initializeProject, listProjects } from './manager.js';
 import { validateProjectName } from './schema.js';
-import { buildProjectKnowledge } from '../knowledge/builder.js';
+import {
+  buildProjectKnowledge,
+  type BuildProjectKnowledgeResult,
+} from '../knowledge/builder.js';
 
 export interface ProjectCommandRuntime {
   dataRoot: string;
@@ -73,14 +76,31 @@ export function registerProjectCommands(
 
         const provider = providerFactory(settings);
         const projectRoot = join(dataRoot, 'projects', projectName);
-        const result = await buildProjectKnowledge({
-          sourcePath,
-          projectRoot,
-          knowledgeRoot: join(projectRoot, 'knowledge'),
-          project: projectMetadata,
-          provider,
-          model,
-        });
+        const controller = new AbortController();
+        const abortBuild = (): void => controller.abort();
+        process.once('SIGINT', abortBuild);
+        let result: BuildProjectKnowledgeResult;
+        try {
+          result = await buildProjectKnowledge({
+            sourcePath,
+            projectRoot,
+            knowledgeRoot: join(projectRoot, 'knowledge'),
+            project: projectMetadata,
+            provider,
+            model,
+            signal: controller.signal,
+            onProgress: (event) => {
+              const counts =
+                event.completed === undefined || event.total === undefined
+                  ? ''
+                  : ` (${event.completed}/${event.total})`;
+              const message = event.message === undefined ? '' : `: ${event.message}`;
+              writeOut(`Progress: ${event.stage}${counts}${message}\n`);
+            },
+          });
+        } finally {
+          process.removeListener('SIGINT', abortBuild);
+        }
         writeOut(
           `Built project ${projectName}: ${result.sources} source(s), ${result.sections} section(s), ` +
             `${result.categories} categor${result.categories === 1 ? 'y' : 'ies'}, ` +
