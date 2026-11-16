@@ -160,7 +160,9 @@ export function registerProjectCommands(
         writeOut(`Knowledge tree for ${projectName}:\n`);
         writeOut(
           entries.length === 0
-            ? 'No knowledge documents or categories found.\n'
+            ? hasKnowledgeEntries(tree)
+              ? `No categories or documents at depth ${maximumDepth}.\n`
+              : 'No knowledge documents or categories found.\n'
             : `${entries.join('\n')}\n`,
         );
       });
@@ -206,6 +208,10 @@ function renderKnowledgeTree(tree: KnowledgeTree, maximumDepth: number): string[
 
   visit(tree.categories, tree.documents);
   return lines;
+}
+
+function hasKnowledgeEntries(tree: KnowledgeTree): boolean {
+  return tree.categories.length > 0 || tree.documents.length > 0;
 }
 
 function createProjectRuntime(): ProjectCommandRuntime {
