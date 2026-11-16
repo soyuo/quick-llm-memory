@@ -1,0 +1,237 @@
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { ConfigurationError } from '../src/config/error.js';
+import { InputError, InternalError } from '../src/errors/qlm-error.js';
+import {
+  createMarkdownDocument,
+  moveMarkdownDocument,
+  readStoredMarkdownDocument,
+  saveMarkdownDocument,
+  type MarkdownDocumentDraft,
+} from '../src/markdown/repository.js';
+
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+describe('Markdown document repository', () => {
+  it('creates and reads a Markdown document with a generated logical ID', () => {
+    const knowledgeRoot = createKnowledgeRoot();
+    const draft = createDraft();
+
+    const created = createMarkdownDocument(
+      knowledgeRoot,
+      'security/authentication.md',
+      draft,
+    );
+    const read = readStoredMarkdownDocument(
+      knowledgeRoot,
+      'security/authentication.md',
+    );
+
+    expect(created.metadata.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
+    expect(created.metadata.id).toBe(read.metadata.id);
+    expect(created.body).toBe(draft.body);
+    expect(read.body).toBe(draft.body);
+    expect(read.sourcePath).toBe(join(knowledgeRoot, 'security', 'authentication.md'));
+    expect(readFileSync(read.sourcePath, 'utf8')).toContain(
+      `id: ${created.metadata.id}`,
+    );
+  });
+
+  it('updates an existing document while retaining its ID', () => {
+    const knowledgeRoot = createKnowledgeRoot();
+    const created = createMarkdownDocument(
+      knowledgeRoot,
+      'notes/authentication.md',
+      createDraft(),
+    );
+    const updatedDraft = createDraft({
+      title: 'Updated title',
+      body: '\nUpdated body.\n',
+    });
+
+    const saved = saveMarkdownDocument(
+      knowledgeRoot,
+      'notes/authentication.md',
+      updatedDraft,
+    );
+
+    expect(saved.metadata.id).toBe(created.metadata.id);
+    expect(saved.metadata.title).toBe('Updated title');
+    expect(saved.body).toBe(updatedDraft.body);
+  });
+
+  it('creates a new document when saving to a path that does not exist', () => {
+    const knowledgeRoot = createKnowledgeRoot();
+
+    const saved = saveMarkdownDocument(
+      knowledgeRoot,
+      'new/note.md',
+      createDraft(),
+    );
+
+    expect(saved.metadata.id).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(existsSync(saved.sourcePath)).toBe(true);
+  });
+
+  it('moves a document without changing its ID or file contents', () => {
+    const knowledgeRoot = createKnowledgeRoot();
+    const created = createMarkdownDocument(
+      knowledgeRoot,
+      'security/authentication.md',
+      createDraft(),
+    );
+    const originalContents = readFileSync(created.sourcePath);
+
+    const moved = moveMarkdownDocument(
+      knowledgeRoot,
+      'security/authentication.md',
+      'identity/authentication.md',
+    );
+
+    expect(moved.metadata.id).toBe(created.metadata.id);
+    expect(moved.sourcePath).toBe(
+      join(knowledgeRoot, 'identity', 'authentication.md'),
+    );
+    expect(readFileSync(moved.sourcePath)).toEqual(originalContents);
+    expect(existsSync(created.sourcePath)).toBe(false);
+  });
+
+  it('rejects traversal paths without writing outside the knowledge root', () => {
+    const knowledgeRoot = createKnowledgeRoot();
+    const outsidePath = join(temporaryDirectories[0] ?? '', 'outside.md');
+
+    expect(() =>
+      createMarkdownDocument(knowledgeRoot, '../outside.md', createDraft()),
+    ).toThrow(InputError);
+    expect(existsSync(outsidePath)).toBe(false);
+    expect(() =>
+      readStoredMarkdownDocument(knowledgeRoot, '..\\outside.md'),
+    ).toThrow(InputError);
+  });
+
+  it('does not overwrite duplicate create or move targets', () => {
+    const knowledgeRoot = createKnowledgeRoot();
+    const source = createMarkdownDocument(
+      knowledgeRoot,
+      'source.md',
+      createDraft({ title: 'Source' }),
+    );
+    const destination = createMarkdownDocument(
+      knowledgeRoot,
+      'destination.md',
+      createDraft({ title: 'Destination' }),
+    );
+    const sourceContents = readFileSync(source.sourcePath, 'utf8');
+    const destinationContents = readFileSync(destination.sourcePath, 'utf8');
+
+    expect(() =>
+      createMarkdownDocument(knowledgeRoot, 'destination.md', createDraft()),
+    ).toThrow(InputError);
+    expect(() =>
+      moveMarkdownDocument(knowledgeRoot, 'source.md', 'destination.md'),
+    ).toThrow(InputError);
+    expect(readFileSync(source.sourcePath, 'utf8')).toBe(sourceContents);
+    expect(readFileSync(destination.sourcePath, 'utf8')).toBe(destinationContents);
+  });
+
+  it('preserves the previous file when an update write fails partway through', () => {
+    const knowledgeRoot = createKnowledgeRoot();
+    const created = createMarkdownDocument(
+      knowledgeRoot,
+      'notes/stable.md',
+      createDraft(),
+    );
+    const originalContents = readFileSync(created.sourcePath, 'utf8');
+    const originalWriteFileSync = fs.writeFileSync;
+    let partialWriteLength = 0;
+
+    fs.writeFileSync = ((fileDescriptor: number, contents: string | Buffer) => {
+      const text = Buffer.isBuffer(contents) ? contents.toString('utf8') : contents;
+      const partialContents = text.slice(0, 12);
+      originalWriteFileSync(fileDescriptor, partialContents, 'utf8');
+      partialWriteLength = partialContents.length;
+      throw new Error('simulated document write failure');
+    }) as typeof fs.writeFileSync;
+    syncBuiltinESMExports();
+
+    try {
+      expect(() =>
+        saveMarkdownDocument(
+          knowledgeRoot,
+          'notes/stable.md',
+          createDraft({ title: 'Replacement' }),
+        ),
+      ).toThrow(InternalError);
+      expect(partialWriteLength).toBe(12);
+      expect(readFileSync(created.sourcePath, 'utf8')).toBe(originalContents);
+      expect(readdirSync(join(knowledgeRoot, 'notes')).some((name) => name.endsWith('.tmp'))).toBe(false);
+    } finally {
+      fs.writeFileSync = originalWriteFileSync;
+      syncBuiltinESMExports();
+    }
+  });
+
+  it('returns typed path-aware errors for invalid stored Markdown', () => {
+    const knowledgeRoot = createKnowledgeRoot();
+    mkdirSync(knowledgeRoot, { recursive: true });
+    const filePath = join(knowledgeRoot, 'broken.md');
+    writeFileSync(filePath, '---\nid: [\n---\n', 'utf8');
+
+    expect(() => readStoredMarkdownDocument(knowledgeRoot, 'broken.md')).toThrow(
+      ConfigurationError,
+    );
+    try {
+      readStoredMarkdownDocument(knowledgeRoot, 'broken.md');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigurationError);
+      expect((error as ConfigurationError).filePath).toBe(filePath);
+    }
+  });
+});
+
+function createKnowledgeRoot(): string {
+  const directory = mkdtempSync(join(tmpdir(), 'qlm-markdown-repository-'));
+  temporaryDirectories.push(directory);
+  return join(directory, 'knowledge');
+}
+
+function createDraft(
+  overrides: Partial<MarkdownDocumentDraft> & {
+    title?: string;
+    body?: string;
+  } = {},
+): MarkdownDocumentDraft {
+  const { title = 'Authentication', body = '\n# Authentication\n', ...rest } =
+    overrides;
+  return {
+    metadata: {
+      schema_version: 1,
+      title,
+      type: 'document',
+      depth: 2,
+      status: 'draft',
+      ...rest.metadata,
+    },
+    body,
+  };
+}
