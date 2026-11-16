@@ -8,6 +8,13 @@ import {
   renameProject,
   setProjectArchived,
 } from '../projects/manager.js';
+import {
+  exportProject,
+  importProject,
+  inspectProjectBundle,
+  type ProjectTransferOperation,
+  type ProjectTransferProgress,
+} from '../projects/transfer.js';
 import { loadTuiDashboardSnapshot } from './dashboard.js';
 
 export const TUI_SCREENS = [
@@ -29,7 +36,18 @@ type ProjectAction =
   | { kind: 'create'; value: string }
   | { kind: 'rename'; projectName: string; value: string }
   | { kind: 'confirm-archive'; projectName: string; archived: boolean }
-  | { kind: 'confirm-delete'; projectName: string; value: string };
+  | { kind: 'confirm-delete'; projectName: string; value: string }
+  | { kind: 'import-source'; value: string }
+  | { kind: 'import-name'; sourcePath: string; value: string }
+  | { kind: 'confirm-import'; sourcePath: string; projectName: string }
+  | { kind: 'export-destination'; projectName: string; value: string }
+  | { kind: 'confirm-export'; projectName: string; destinationPath: string }
+  | {
+      kind: 'transfer';
+      operation: ProjectTransferOperation;
+      progress: ProjectTransferProgress;
+      controller: AbortController;
+    };
 
 export function getTuiLayout(columns: number, rows: number): TuiLayout {
   if (columns < 60 || rows < 16) {
@@ -78,9 +96,63 @@ export function TuiApp({ columns, rows, dataRoot, onExit }: TuiAppProps): React.
     : Math.max(0, selectedProjectIndex);
   const { exit } = useApp();
 
+  const startProjectTransfer = (
+    operation: ProjectTransferOperation,
+    details: { sourcePath: string; projectName: string } | { destinationPath: string; projectName: string },
+  ): void => {
+    const controller = new AbortController();
+    setProjectMessage(undefined);
+    setProjectAction({
+      kind: 'transfer',
+      operation,
+      controller,
+      progress: { operation, phase: 'validating', completedFiles: 0, totalFiles: 0 },
+    });
+
+    const onProgress = (progress: ProjectTransferProgress): void => {
+      setProjectAction((current) => current.kind === 'transfer'
+        ? { ...current, progress }
+        : current);
+    };
+
+    void (async () => {
+      try {
+        if (operation === 'import' && 'sourcePath' in details) {
+          const project = await importProject(root, details.sourcePath, details.projectName, {
+            signal: controller.signal,
+            onProgress,
+          });
+          setSelectedProjectName(project.name);
+          setProjectCursorName(project.name);
+          setProjectMessage(`Imported project ${project.name}.`);
+        } else if (operation === 'export' && 'destinationPath' in details) {
+          await exportProject(root, details.projectName, details.destinationPath, {
+            signal: controller.signal,
+            onProgress,
+          });
+          setProjectMessage(`Exported project ${details.projectName}.`);
+        }
+      } catch (error) {
+        setProjectMessage(controller.signal.aborted
+          ? 'Transfer cancelled; the destination was not changed.'
+          : getSafeProjectError(error));
+      } finally {
+        setProjectAction({ kind: 'idle' });
+        setRefreshVersion((version) => version + 1);
+      }
+    })();
+  };
+
   useInput((input, key) => {
     if (activeScreen === 'Projects' && projectAction.kind !== 'idle') {
       if (key.tab) {
+        return;
+      }
+      if (projectAction.kind === 'transfer') {
+        if (key.escape) {
+          projectAction.controller.abort();
+          setProjectMessage('Cancelling transfer; waiting for a safe stop before commit.');
+        }
         return;
       }
       if (key.escape) {
@@ -132,6 +204,76 @@ export function TuiApp({ columns, rows, dataRoot, onExit }: TuiAppProps): React.
         } else if (isTextInput(input, key)) {
           setProjectAction({ ...projectAction, value: projectAction.value + input });
           setProjectMessage(undefined);
+        }
+        return;
+      }
+
+      if (projectAction.kind === 'confirm-import') {
+        if (input.toLowerCase() === 'y') {
+          startProjectTransfer('import', projectAction);
+        } else if (input.toLowerCase() === 'n') {
+          setProjectAction({ kind: 'idle' });
+          setProjectMessage('Import cancelled.');
+        }
+        return;
+      }
+
+      if (projectAction.kind === 'confirm-export') {
+        if (input.toLowerCase() === 'y') {
+          startProjectTransfer('export', projectAction);
+        } else if (input.toLowerCase() === 'n') {
+          setProjectAction({ kind: 'idle' });
+          setProjectMessage('Export cancelled.');
+        }
+        return;
+      }
+
+      if (projectAction.kind === 'import-source') {
+        if (key.backspace || key.delete) {
+          setProjectAction({ ...projectAction, value: projectAction.value.slice(0, -1) });
+        } else if (key.return) {
+          void inspectProjectBundle(projectAction.value).then((metadata) => {
+            setProjectAction({
+              kind: 'import-name',
+              sourcePath: projectAction.value,
+              value: metadata.name,
+            });
+            setProjectMessage(undefined);
+          }).catch((error: unknown) => {
+            setProjectMessage(getSafeProjectError(error));
+          });
+        } else if (isTextInput(input, key)) {
+          setProjectAction({ ...projectAction, value: projectAction.value + input });
+        }
+        return;
+      }
+
+      if (projectAction.kind === 'import-name') {
+        if (key.backspace || key.delete) {
+          setProjectAction({ ...projectAction, value: projectAction.value.slice(0, -1) });
+        } else if (key.return) {
+          setProjectAction({
+            kind: 'confirm-import',
+            sourcePath: projectAction.sourcePath,
+            projectName: projectAction.value,
+          });
+        } else if (isTextInput(input, key)) {
+          setProjectAction({ ...projectAction, value: projectAction.value + input });
+        }
+        return;
+      }
+
+      if (projectAction.kind === 'export-destination') {
+        if (key.backspace || key.delete) {
+          setProjectAction({ ...projectAction, value: projectAction.value.slice(0, -1) });
+        } else if (key.return) {
+          setProjectAction({
+            kind: 'confirm-export',
+            projectName: projectAction.projectName,
+            destinationPath: projectAction.value,
+          });
+        } else if (isTextInput(input, key)) {
+          setProjectAction({ ...projectAction, value: projectAction.value + input });
         }
         return;
       }
@@ -221,6 +363,11 @@ export function TuiApp({ columns, rows, dataRoot, onExit }: TuiAppProps): React.
         setProjectAction({ kind: 'create', value: '' });
         return;
       }
+      if (input.toLowerCase() === 'i') {
+        setProjectMessage(undefined);
+        setProjectAction({ kind: 'import-source', value: '' });
+        return;
+      }
       if (project === undefined) {
         return;
       }
@@ -237,6 +384,9 @@ export function TuiApp({ columns, rows, dataRoot, onExit }: TuiAppProps): React.
       } else if (input.toLowerCase() === 'd') {
         setProjectMessage(undefined);
         setProjectAction({ kind: 'confirm-delete', projectName: project.name, value: '' });
+      } else if (input.toLowerCase() === 'e') {
+        setProjectMessage(undefined);
+        setProjectAction({ kind: 'export-destination', projectName: project.name, value: '' });
       }
       return;
     }
@@ -340,8 +490,36 @@ export function TuiApp({ columns, rows, dataRoot, onExit }: TuiAppProps): React.
               Delete {projectAction.projectName}? Type the exact name: {projectAction.value}_ (Enter delete, Esc cancel)
             </Text>
           ) : null}
+          {projectAction.kind === 'import-source' ? (
+            <Text>Import from project directory: {projectAction.value}_ (Enter continue, Esc cancel)</Text>
+          ) : null}
+          {projectAction.kind === 'import-name' ? (
+            <Text>Import as project name: {projectAction.value}_ (Enter continue, Esc cancel)</Text>
+          ) : null}
+          {projectAction.kind === 'confirm-import' ? (
+            <Text>
+              Valid project directory. Import as {projectAction.projectName}? Press y to copy, Esc to cancel.
+            </Text>
+          ) : null}
+          {projectAction.kind === 'export-destination' ? (
+            <Text>Export {projectAction.projectName} to new directory: {projectAction.value}_ (Enter continue, Esc cancel)</Text>
+          ) : null}
+          {projectAction.kind === 'confirm-export' ? (
+            <Text>
+              Export {projectAction.projectName} to the entered directory? Existing paths are preserved. Press y to copy, Esc to cancel.
+            </Text>
+          ) : null}
+          {projectAction.kind === 'transfer' ? (
+            <Text>
+              {projectAction.progress.phase === 'validating'
+                ? `Validating ${projectAction.operation} source and destination...`
+                : projectAction.progress.phase === 'copying'
+                  ? `${projectAction.operation === 'import' ? 'Importing' : 'Exporting'} files ${projectAction.progress.completedFiles}/${projectAction.progress.totalFiles}... Esc cancels before commit.`
+                  : `Ready to commit ${projectAction.operation}; press Esc to cancel.`}
+            </Text>
+          ) : null}
           {projectMessage ? <Text>{projectMessage}</Text> : null}
-          <Text>Arrows choose; Enter selects; c creates; n renames; a archives/restores; d deletes.</Text>
+          <Text>Arrows choose; Enter selects; c create; n rename; a archive/restore; d delete; i import; e export.</Text>
         </>
       ) : (
         <Text>{activeScreen} screen is not available yet.</Text>
