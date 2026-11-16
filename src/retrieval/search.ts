@@ -6,8 +6,9 @@ import { readStoredMarkdownSource } from '../markdown/repository.js';
 import { openProjectDatabaseReadOnly } from '../database/database.js';
 import { rebuildProjectIndex } from '../database/reindex.js';
 import type { ProjectMetadata } from '../projects/schema.js';
+import { reciprocalRankFusionRanker, type RankedSearchSource, type RetrievalRanker } from './ranker.js';
 
-export type RetrievalMode = 'path' | 'hierarchical' | 'fulltext';
+export type RetrievalMode = 'path' | 'hierarchical' | 'fulltext' | 'hybrid';
 
 export interface SearchRequest {
   projectId: string;
@@ -20,6 +21,7 @@ export interface SearchRequest {
 export interface RetrievalSearchRequest extends SearchRequest {
   projectRoot: string;
   project: ProjectMetadata;
+  ranker?: RetrievalRanker;
 }
 
 export interface SearchResult {
@@ -27,6 +29,7 @@ export interface SearchResult {
   path: string;
   title: string;
   snippet: string;
+  /** Reciprocal-rank score; it is an ordering signal, not a probability. */
   score: number;
   sourceIds: string[];
   matchedSections: string[];
@@ -43,9 +46,9 @@ const MAX_SNIPPET_LENGTH = 160;
 export function searchProjectDocuments(
   request: RetrievalSearchRequest,
 ): RetrievalSearchResult[] {
-  if (!['path', 'hierarchical', 'fulltext'].includes(request.mode)) {
+  if (!['path', 'hierarchical', 'fulltext', 'hybrid'].includes(request.mode)) {
     throw new InputError('Unsupported retrieval mode.', {
-      suggestedAction: 'Use path, hierarchical, or fulltext retrieval.',
+      suggestedAction: 'Use path, hierarchical, fulltext, or hybrid retrieval.',
     });
   }
   const maxResults = validateLimit(request.maxResults, DEFAULT_MAX_RESULTS, 'maxResults');
@@ -78,48 +81,69 @@ function searchIndexedDocuments(
 ): RetrievalSearchResult[] {
   const database = openProjectDatabaseReadOnly(request.projectRoot, request.project);
   let staleFullTextIndex = false;
-  const results: RetrievalSearchResult[] = [];
+  const rankedSources: RankedSearchSource[] = [];
   try {
-    const rows = request.mode === 'path'
-      ? findPathMatch(database, request.project.id, query)
-      : request.mode === 'hierarchical'
-        ? findHierarchyMatches(database, request.project.id, query, maxDepth, maxResults)
-        : findFullTextMatches(database, request.project.id, query, maxResults);
+    const candidateSources = findCandidateRows(
+      database,
+      request.project.id,
+      request.mode,
+      query,
+      maxDepth,
+      request.mode === 'hybrid' ? MAX_MAX_RESULTS : maxResults,
+    );
+    const resultsById = new Map<string, RetrievalSearchResult>();
 
-    for (const row of rows.slice(0, maxResults)) {
-      let source: ReturnType<typeof readStoredMarkdownSource>;
-      try {
-        source = readStoredMarkdownSource(joinKnowledgeRoot(request.projectRoot), row.path);
-      } catch (cause) {
-        if (request.mode === 'fulltext' && canSynchronize && cause instanceof ConfigurationError) {
-          staleFullTextIndex = true;
-          break;
+    for (const candidateSource of candidateSources) {
+      const sourceResults: RetrievalSearchResult[] = [];
+      for (const row of candidateSource.rows) {
+        const existing = resultsById.get(row.id);
+        if (existing !== undefined) {
+          sourceResults.push(existing);
+          continue;
         }
-        throw cause;
-      }
-      const document = source.document;
-      const contentHash = createHash('sha256').update(source.sourceText).digest('hex');
-      if (document.metadata.type !== 'document' || document.metadata.id !== row.id ||
-          contentHash !== row.contentHash) {
-        if (request.mode === 'fulltext' && canSynchronize) {
-          staleFullTextIndex = true;
-          break;
+        let source: ReturnType<typeof readStoredMarkdownSource>;
+        try {
+          source = readStoredMarkdownSource(joinKnowledgeRoot(request.projectRoot), row.path);
+        } catch (cause) {
+          if (
+            canSynchronize && isSynchronizingMode(request.mode) &&
+            cause instanceof ConfigurationError
+          ) {
+            staleFullTextIndex = true;
+            break;
+          }
+          throw cause;
         }
-        throw staleIndexError(row.path);
+        const document = source.document;
+        const contentHash = createHash('sha256').update(source.sourceText).digest('hex');
+        if (
+          document.metadata.type !== 'document' || document.metadata.id !== row.id ||
+          contentHash !== row.contentHash
+        ) {
+          if (canSynchronize && isSynchronizingMode(request.mode)) {
+            staleFullTextIndex = true;
+            break;
+          }
+          throw staleIndexError(row.path);
+        }
+        const content = document.body.replace(/\s+/g, ' ').trim();
+        const result = {
+          documentId: row.id,
+          path: row.path,
+          title: document.metadata.title,
+          snippet: content.length <= MAX_SNIPPET_LENGTH
+            ? content
+            : `${content.slice(0, MAX_SNIPPET_LENGTH - 3).trimEnd()}...`,
+          score: 0,
+          sourceIds: [...(document.metadata.source_ids ?? [])],
+          matchedSections: [...(document.metadata.source_sections ?? [])],
+          tokenCount: Math.max(1, Math.ceil(document.body.length / 4)),
+        } satisfies RetrievalSearchResult;
+        resultsById.set(row.id, result);
+        sourceResults.push(result);
       }
-      const content = document.body.replace(/\s+/g, ' ').trim();
-      results.push({
-        documentId: row.id,
-        path: row.path,
-        title: document.metadata.title,
-        snippet: content.length <= MAX_SNIPPET_LENGTH
-          ? content
-          : `${content.slice(0, MAX_SNIPPET_LENGTH - 3).trimEnd()}...`,
-        score: request.mode === 'path' ? 1 : 0,
-        sourceIds: [...(document.metadata.source_ids ?? [])],
-        matchedSections: [...(document.metadata.source_sections ?? [])],
-        tokenCount: Math.max(1, Math.ceil(document.body.length / 4)),
-      });
+      rankedSources.push({ mode: candidateSource.mode, results: sourceResults });
+      if (staleFullTextIndex) break;
     }
   } finally {
     database.close();
@@ -132,7 +156,53 @@ function searchIndexedDocuments(
     rebuildProjectIndex(request.projectRoot, request.project);
     return searchIndexedDocuments(request, query, maxDepth, maxResults, false);
   }
-  return results;
+  const ranker = request.ranker ?? reciprocalRankFusionRanker;
+  return ranker.rank(rankedSources, maxResults).slice(0, maxResults);
+}
+
+interface CandidateRows {
+  mode: Exclude<RetrievalMode, 'hybrid'>;
+  rows: IndexedDocumentRow[];
+}
+
+function findCandidateRows(
+  database: ReturnType<typeof openProjectDatabaseReadOnly>,
+  projectId: string,
+  mode: RetrievalMode,
+  query: string,
+  maxDepth: number,
+  maxResults: number,
+): CandidateRows[] {
+  if (mode === 'path') {
+    return [{ mode, rows: findPathMatch(database, projectId, query) }];
+  }
+  if (mode === 'hierarchical') {
+    return [{ mode, rows: findHierarchyMatches(database, projectId, query, maxDepth, maxResults) }];
+  }
+  if (mode === 'fulltext') {
+    return [{ mode, rows: findFullTextMatches(database, projectId, query, maxResults) }];
+  }
+
+  const sources: CandidateRows[] = [];
+  const isDocumentPath = /\.(?:md|markdown)$/i.test(query);
+  if (isDocumentPath) {
+    sources.push({ mode: 'path', rows: findPathMatch(database, projectId, query) });
+  }
+  sources.push({
+    mode: 'hierarchical',
+    rows: findHierarchyMatches(database, projectId, query, maxDepth, maxResults),
+  });
+  if (!isDocumentPath && query !== '.' && query !== '/') {
+    sources.push({
+      mode: 'fulltext',
+      rows: findFullTextMatches(database, projectId, query, maxResults),
+    });
+  }
+  return sources;
+}
+
+function isSynchronizingMode(mode: RetrievalMode): boolean {
+  return mode === 'fulltext' || mode === 'hybrid';
 }
 
 function staleIndexError(path: string): InputError {
@@ -200,7 +270,7 @@ function findHierarchyMatches(
     WHERE documents.project_id = ?
       AND (length(documents.path) - length(replace(documents.path, '/', '')) + 1) <= ?
       AND (subtree.id IS NOT NULL OR (? = 1 AND documents.category_id IS NULL))
-    ORDER BY documents.path COLLATE BINARY
+    ORDER BY documents.depth ASC, documents.path COLLATE BINARY
     LIMIT ?
   `).all(
     ...anchorParameters,
@@ -225,7 +295,7 @@ function findFullTextMatches(
       FROM document_fts
       JOIN documents ON documents.id = document_fts.document_id
       WHERE document_fts MATCH ? AND documents.project_id = ?
-      ORDER BY documents.path COLLATE BINARY
+      ORDER BY bm25(document_fts) ASC, documents.path COLLATE BINARY
       LIMIT ?
     `).all(query, projectId, maxResults) as IndexedDocumentRow[];
   } catch (cause) {
