@@ -1,9 +1,12 @@
 import {
   closeSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
   readdirSync,
+  renameSync,
+  rmSync,
   rmdirSync,
   unlinkSync,
   writeFileSync,
@@ -182,6 +185,178 @@ export function listProjects(dataRoot: string): ProjectMetadata[] {
   return projects.sort((left, right) =>
     left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
   );
+}
+
+export function renameProject(
+  dataRoot: string,
+  currentName: string,
+  nextName: string,
+): ProjectMetadata {
+  const sourceName = validateProjectName(currentName);
+  const project = requireProject(dataRoot, sourceName);
+  const targetName = validateProjectName(nextName);
+  if (sourceName === targetName) {
+    return project;
+  }
+
+  const projectsDirectory = join(dataRoot, PROJECTS_DIRECTORY);
+  const sourceDirectory = join(projectsDirectory, sourceName);
+  const targetDirectory = join(projectsDirectory, targetName);
+  if (pathExists(targetDirectory)) {
+    throw new InputError(`Project already exists: ${targetName}.`, {
+      suggestedAction: 'Choose a different project name.',
+    });
+  }
+
+  try {
+    renameSync(sourceDirectory, targetDirectory);
+  } catch (error) {
+    if (isAlreadyExistsError(error)) {
+      throw new InputError(`Project already exists: ${targetName}.`, {
+        suggestedAction: 'Choose a different project name.',
+      });
+    }
+    throw new InternalError('Unable to rename the project directory.', {
+      cause: error,
+      suggestedAction: 'Check that the projects directory is writable.',
+    });
+  }
+
+  const renamedProject = projectMetadataSchema.parse({
+    ...project,
+    name: targetName,
+    updated_at: new Date().toISOString(),
+  });
+  try {
+    writeProjectMetadata(targetDirectory, renamedProject);
+  } catch (error) {
+    try {
+      renameSync(targetDirectory, sourceDirectory);
+    } catch (rollbackError) {
+      throw new InternalError('Unable to finish or roll back the project rename.', {
+        cause: new AggregateError([error, rollbackError]),
+        suggestedAction: 'Inspect the projects directory and restore the project folder name.',
+      });
+    }
+    throw error;
+  }
+  return renamedProject;
+}
+
+export function setProjectArchived(
+  dataRoot: string,
+  name: string,
+  archived: boolean,
+): ProjectMetadata {
+  const project = requireProject(dataRoot, name);
+  if ((project.archived_at !== undefined) === archived) {
+    return project;
+  }
+  const updated = projectMetadataSchema.parse({
+    ...project,
+    ...(archived ? { archived_at: new Date().toISOString() } : {}),
+    updated_at: new Date().toISOString(),
+  });
+  if (!archived) {
+    delete (updated as { archived_at?: string }).archived_at;
+  }
+  writeProjectMetadata(join(dataRoot, PROJECTS_DIRECTORY, project.name), updated);
+  return updated;
+}
+
+export function deleteProject(
+  dataRoot: string,
+  name: string,
+  confirmation: string,
+): void {
+  const projectName = validateProjectName(name);
+  if (confirmation !== projectName) {
+    throw new InputError('Project deletion was not confirmed.', {
+      suggestedAction: `Type ${projectName} exactly to confirm deletion.`,
+    });
+  }
+  requireProject(dataRoot, projectName);
+  const projectDirectory = join(dataRoot, PROJECTS_DIRECTORY, projectName);
+  try {
+    rmSync(projectDirectory, { recursive: true });
+  } catch (error) {
+    throw new InternalError('Unable to delete the project.', {
+      cause: error,
+      suggestedAction: 'Check that the project data is not in use and the data directory is writable.',
+    });
+  }
+}
+
+function requireProject(dataRoot: string, name: string): ProjectMetadata {
+  const projectName = validateProjectName(name);
+  const project = listProjects(dataRoot).find(({ name: listedName }) => listedName === projectName);
+  if (project === undefined) {
+    throw new InputError(`Project not found: ${projectName}.`, {
+      suggestedAction: 'Refresh the project list and choose an existing project.',
+    });
+  }
+
+  const projectDirectory = join(dataRoot, PROJECTS_DIRECTORY, projectName);
+  try {
+    const info = lstatSync(projectDirectory);
+    if (!info.isDirectory() || info.isSymbolicLink()) {
+      throw new InputError(`Project is not a regular directory: ${projectName}.`);
+    }
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      throw new InputError(`Project not found: ${projectName}.`);
+    }
+    throw error;
+  }
+  return project;
+}
+
+function writeProjectMetadata(
+  projectDirectory: string,
+  metadata: ProjectMetadata,
+): void {
+  const metadataPath = join(projectDirectory, PROJECT_METADATA_FILE);
+  const temporaryPath = join(projectDirectory, `.project-${randomUUID()}.tmp`);
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(temporaryPath, 'wx');
+    writeFileSync(descriptor, stringifyYaml(metadata), 'utf8');
+    closeSync(descriptor);
+    descriptor = undefined;
+    renameSync(temporaryPath, metadataPath);
+  } catch (error) {
+    if (descriptor !== undefined) {
+      try {
+        closeSync(descriptor);
+      } catch {
+        // Preserve the metadata write error.
+      }
+    }
+    try {
+      unlinkSync(temporaryPath);
+    } catch {
+      // Temporary metadata cleanup is best-effort.
+    }
+    throw new InternalError('Unable to update project metadata.', {
+      cause: error,
+      suggestedAction: 'Check that the project directory is writable.',
+    });
+  }
+}
+
+function pathExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return false;
+    }
+    throw new InternalError('Unable to inspect the target project path.', {
+      cause: error,
+      suggestedAction: 'Check that the projects directory is readable.',
+    });
+  }
 }
 
 function isAlreadyExistsError(error: unknown): error is NodeJS.ErrnoException {
