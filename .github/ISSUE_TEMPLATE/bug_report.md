@@ -1,50 +1,53 @@
 ---
-name: 버그 제보
-about: 예상과 다르게 동작하는 문제를 알려주세요.
+name: Bug report
+about: Report behavior that differs from what you expected.
 title: "[Bug] "
 labels: bug
 assignees: ""
 ---
 
-## 문제 설명
+## Target milestone
 
-무엇이 잘못되었는지 간단히 설명해주세요.
+- Phase (assign during triage):
+- Related SPEC section:
 
-## 재현 방법
+## Problem description
 
-문제를 재현하는 단계를 적어주세요.
+Describe what went wrong.
 
-1. 실행한 명령 또는 작업
-2. 입력한 값이나 선택한 항목
-3. 확인한 결과
+## Steps to reproduce
 
-## 구현 계획
+1. Command or action:
+2. Input or selection:
+3. Observed result:
 
-<!-- 조사 및 수정 단계를 실행 순서대로 작성해주세요. -->
+## Implementation plan
+
+<!-- List investigation and fix steps in execution order. -->
 
 1. [ ]
 2. [ ]
 
-## 완료 조건
+## Acceptance criteria
 
-- [ ] 문제를 재현하거나 원인을 확인했습니다.
-- [ ] 수정 후 기대한 동작을 확인했습니다.
+- [ ] The problem can be reproduced or its cause is confirmed.
+- [ ] The expected behavior is verified after the fix.
 
-## 기대한 동작
+## Expected behavior
 
-기대했던 결과를 적어주세요.
+Describe what you expected to happen.
 
-## 실제 동작
+## Actual behavior
 
-실제로 나타난 결과와 오류 메시지를 적어주세요. 로그에 API 키, 토큰, 개인 경로 등 민감한 정보가 포함되지 않았는지 확인해주세요.
+Describe what happened and include any error messages. Remove API keys, tokens, personal paths, and other sensitive information from logs.
 
-## 실행 환경
+## Environment
 
-- quick-llm-memory 버전 또는 커밋:
-- 운영체제:
-- Node.js 버전:
-- 사용한 AI Provider 또는 MCP 연결(해당하는 경우):
+- quick-llm-memory version or commit:
+- Operating system:
+- Node.js version:
+- AI provider or MCP connection, if applicable:
 
-## 추가 정보
+## Additional information
 
-문제 확인에 도움이 되는 스크린샷이나 로그가 있으면 첨부해주세요.
+Attach screenshots or logs that help reproduce or diagnose the issue.
