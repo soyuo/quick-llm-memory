@@ -21,6 +21,7 @@ import {
   searchProjectDocuments,
   type RetrievalMode,
 } from '../retrieval/search.js';
+import { selectRetrievalResultsWithinTokenBudget } from '../retrieval/token-budget.js';
 import {
   buildKnowledgeTree,
   type CategoryTreeNode,
@@ -259,6 +260,7 @@ export function registerProjectCommands(
     .option('--mode <mode>', 'Retrieval mode: path, hierarchical, fulltext, or hybrid')
     .option('--max-depth <depth>', 'Maximum hierarchy depth')
     .option('--max-results <count>', 'Maximum number of results')
+    .option('--max-tokens <count>', 'Maximum estimated context tokens')
     .option('--include-related', 'Include directly related documents (default limit: 5)')
     .option('--max-related-results <count>', 'Maximum related documents to add (0-20)')
     .action(async (
@@ -268,6 +270,7 @@ export function registerProjectCommands(
         mode?: string;
         maxDepth?: string;
         maxResults?: string;
+        maxTokens?: string;
         includeRelated?: boolean;
         maxRelatedResults?: string;
       },
@@ -285,6 +288,7 @@ export function registerProjectCommands(
 
         if (options.mode !== undefined) {
           const mode = parseRetrievalMode(options.mode);
+          const maxTokens = parseOptionalLimit(options.maxTokens, 'Maximum tokens');
           if (options.maxDepth !== undefined && mode !== 'hierarchical') {
             throw new InputError('--max-depth is only supported with hierarchical mode.', {
               suggestedAction: 'Use --mode hierarchical with --max-depth.',
@@ -304,12 +308,27 @@ export function registerProjectCommands(
               'Maximum related results',
             ),
           });
+          const tokenBudget = maxTokens === undefined
+            ? undefined
+            : selectRetrievalResultsWithinTokenBudget(
+              results,
+              maxTokens,
+            );
+          const selectedResults = tokenBudget?.results ?? results;
           writeOut(`Search results (${mode}) for ${JSON.stringify(query)}:\n`);
-          if (results.length === 0) {
-            writeOut('No matching documents found.\n');
+          if (tokenBudget !== undefined) {
+            writeOut(
+              `Estimated token budget: ${tokenBudget.consumedTokens}/${tokenBudget.maxTokens}; ` +
+                `counts are estimates.\n`,
+            );
+          }
+          if (selectedResults.length === 0) {
+            writeOut(tokenBudget === undefined
+              ? 'No matching documents found.\n'
+              : 'No matching documents fit the token budget.\n');
             return;
           }
-          for (const result of results) {
+          for (const result of selectedResults) {
             writeOut(
               `- ${result.path} — ${result.title}\n` +
                 `  ${result.snippet}\n` +
@@ -326,6 +345,7 @@ export function registerProjectCommands(
 
         if (
           options.maxDepth !== undefined || options.maxResults !== undefined ||
+          options.maxTokens !== undefined ||
           options.includeRelated === true || options.maxRelatedResults !== undefined
         ) {
           throw new InputError('Retrieval limits require an explicit --mode.', {
