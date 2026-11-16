@@ -3,10 +3,12 @@ import type { Command } from 'commander';
 import { loadSettings } from '../config/settings.js';
 import { resolveSettingsPaths } from '../config/paths.js';
 import { InputError } from '../errors/qlm-error.js';
+import { rebuildProjectIndex } from '../database/reindex.js';
 import {
   createApplicationLogger,
   logApplicationError,
   logProjectCreated,
+  logProjectReindexed,
   type ApplicationLogger,
 } from '../logging/logger.js';
 import { validateInternalLinks } from '../markdown/link-validator.js';
@@ -95,6 +97,32 @@ export function registerProjectCommands(
 
         writeOut(
           `Validated ${result.filesScanned} Markdown file(s) and ${result.linksChecked} link(s); no broken links found.\n`,
+        );
+      });
+    });
+
+  cli
+    .command('reindex')
+    .description('Rebuild the project SQLite index from Markdown')
+    .requiredOption('--project <name>', 'Project to reindex')
+    .action(async ({ project }: { project: string }) => {
+      await withProjectRuntime(runtimeFactory, async ({ dataRoot, logger }) => {
+        const projectName = validateProjectName(project);
+        const projectMetadata = listProjects(dataRoot).find(
+          ({ name }) => name === projectName,
+        );
+        if (projectMetadata === undefined) {
+          throw new InputError(`Project not found: ${projectName}`, {
+            suggestedAction: 'Run qlm project list to see initialized projects.',
+          });
+        }
+
+        const projectRoot = join(dataRoot, 'projects', projectName);
+        const result = rebuildProjectIndex(projectRoot, projectMetadata);
+        logProjectReindexed(logger, projectMetadata.id, result);
+        writeOut(
+          `Reindexed project ${projectName}: ${result.documents} document(s), ` +
+            `${result.categories} category row(s), ${result.relations} relation(s).\n`,
         );
       });
     });
