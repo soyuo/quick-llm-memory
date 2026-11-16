@@ -256,7 +256,7 @@ export function registerProjectCommands(
     .command('search <query>')
     .description('Search project Markdown documents')
     .requiredOption('--project <name>', 'Project to search')
-    .option('--mode <mode>', 'Retrieval mode: path, hierarchical, or fulltext')
+    .option('--mode <mode>', 'Retrieval mode: path, hierarchical, fulltext, or hybrid')
     .option('--max-depth <depth>', 'Maximum hierarchy depth')
     .option('--max-results <count>', 'Maximum number of results')
     .action(async (
@@ -339,11 +339,11 @@ export function registerProjectCommands(
 }
 
 function parseRetrievalMode(value: string): RetrievalMode {
-  if (value === 'path' || value === 'hierarchical' || value === 'fulltext') {
+  if (value === 'path' || value === 'hierarchical' || value === 'fulltext' || value === 'hybrid') {
     return value;
   }
   throw new InputError(`Unsupported retrieval mode: ${value}`, {
-    suggestedAction: 'Use --mode path, --mode hierarchical, or --mode fulltext.',
+    suggestedAction: 'Use --mode path, --mode hierarchical, --mode fulltext, or --mode hybrid.',
   });
 }
 
