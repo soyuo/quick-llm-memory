@@ -72,8 +72,11 @@ describe('project management', () => {
     const dataRoot = createTemporaryDirectory('qlm-project-write-failure-');
     const projectDirectory = join(dataRoot, 'projects', 'retryable');
     const originalWriteFileSync = fs.writeFileSync;
+    let partialWriteLength = 0;
     fs.writeFileSync = ((fileDescriptor: number, contents: string) => {
-      originalWriteFileSync(fileDescriptor, contents, 'utf8');
+      const partialContents = contents.slice(0, 8);
+      originalWriteFileSync(fileDescriptor, partialContents, 'utf8');
+      partialWriteLength = partialContents.length;
       throw new Error('simulated metadata write failure');
     }) as typeof fs.writeFileSync;
     syncBuiltinESMExports();
@@ -82,12 +85,15 @@ describe('project management', () => {
       expect(() => initializeProject(dataRoot, 'retryable')).toThrow(
         InternalError,
       );
+      expect(partialWriteLength).toBe(8);
       expect(existsSync(projectDirectory)).toBe(false);
-      expect(listProjects(dataRoot)).toEqual([]);
     } finally {
       fs.writeFileSync = originalWriteFileSync;
       syncBuiltinESMExports();
     }
+
+    expect(initializeProject(dataRoot, 'retryable').name).toBe('retryable');
+    expect(listProjects(dataRoot).map(({ name }) => name)).toEqual(['retryable']);
   });
 
   it('lists valid projects in stable order and ignores directories without metadata', () => {
