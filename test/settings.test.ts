@@ -82,14 +82,14 @@ describe('loadSettings', () => {
     mkdirSync(paths.configDir, { recursive: true });
     writeFileSync(
       paths.configFile,
-      'application:\n  name: quick-llm-memory\nlogging: {}\nai:\n  provider: openai\n',
+      'application:\n  name: quick-llm-memory\nlogging: {}\nai:\n  provider: openai\n  model: test-model\n',
     );
 
     const settings = loadSettings({ paths });
 
     expect(settings.logging.level).toBe('info');
     expect(settings.application).toEqual({ name: 'quick-llm-memory' });
-    expect(settings.ai).toEqual({ provider: 'openai' });
+    expect(settings.ai).toEqual({ provider: 'openai', model: 'test-model' });
   });
 
   it('uses defaults when the config file is missing', () => {
@@ -105,6 +105,15 @@ describe('loadSettings', () => {
 
     expect(() => loadSettings({ paths })).toThrow(ConfigurationError);
     expect(() => loadSettings({ paths })).toThrow(/logging\.level/);
+  });
+
+  it('rejects a blank configured AI model', () => {
+    const paths = createSettingsPaths();
+    mkdirSync(paths.configDir, { recursive: true });
+    writeFileSync(paths.configFile, 'ai:\n  model: "   "\n');
+
+    expect(() => loadSettings({ paths })).toThrow(ConfigurationError);
+    expect(() => loadSettings({ paths })).toThrow(/ai\.model/);
   });
 
   it('returns a typed configuration error for invalid YAML', () => {
