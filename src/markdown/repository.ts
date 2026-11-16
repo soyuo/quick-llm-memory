@@ -41,6 +41,10 @@ export interface MarkdownDocumentDraft {
   body: string;
 }
 
+export function resolveKnowledgeRoot(knowledgeRoot: string): string {
+  return ensureKnowledgeRoot(knowledgeRoot, false);
+}
+
 export function createMarkdownDocument(
   knowledgeRoot: string,
   relativePath: string,
