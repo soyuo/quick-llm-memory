@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
@@ -92,7 +92,8 @@ describe('MCP project, tree, and search tools', () => {
   });
 
   it('returns a depth-bounded relative tree and rejects invalid project input', async () => {
-    const { dataRoot } = fixture();
+    const { dataRoot, knowledgeRoot } = fixture();
+    writeFileSync(join(knowledgeRoot, 'security/deep/unreadable.md'), '---\ninvalid: [yaml\n---\n');
     await withClient(dataRoot, async (client) => {
       const result = await client.callTool({
         name: 'memory_get_tree',
@@ -171,5 +172,31 @@ describe('MCP project, tree, and search tools', () => {
 
     expect(readFileSync(databasePath)).toEqual(beforeDatabase);
     expect(readFileSync(documentPath, 'utf8')).toBe(changedMarkdown);
+  });
+
+  it('maps absolute index-path errors to a safe MCP error', async (context) => {
+    const { dataRoot, projectRoot } = fixture();
+    const databasePath = resolveProjectDatabasePath(projectRoot);
+    const outsideRoot = mkdtempSync(join(tmpdir(), 'qlm-mcp-outside-index-'));
+    roots.push(outsideRoot);
+    const outsideDatabase = join(outsideRoot, 'knowledge.db');
+    copyFileSync(databasePath, outsideDatabase);
+    rmSync(databasePath);
+    try {
+      symlinkSync(outsideDatabase, databasePath, 'file');
+    } catch {
+      context.skip();
+      return;
+    }
+
+    await withClient(dataRoot, async (client) => {
+      const result = await client.callTool({
+        name: 'memory_search',
+        arguments: { project: 'demo', query: 'authentication', mode: 'fulltext' },
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).not.toContain(dataRoot);
+      expect(JSON.stringify(result)).not.toContain(outsideRoot);
+    });
   });
 });

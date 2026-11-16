@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { InputError, QLMError } from '../errors/qlm-error.js';
-import { buildKnowledgeTree, type CategoryTreeNode, type KnowledgeTree } from '../markdown/tree.js';
+import { buildKnowledgeTree } from '../markdown/tree.js';
 import { listProjects } from '../projects/manager.js';
 import { validateProjectName } from '../projects/schema.js';
 import { searchProjectDocuments } from '../retrieval/search.js';
@@ -52,12 +52,15 @@ export function registerMcpTools(
       assertMcpOperationAllowed('read');
       try {
         const scope = resolveMcpProjectScope(options.dataRoot, project);
-        const tree = buildKnowledgeTree(scope.knowledgeRoot);
-        const boundedTree = limitTree(tree, maxDepth ?? MAX_TREE_DEPTH, maxEntries);
+        const tree = buildKnowledgeTree(scope.knowledgeRoot, {
+          maxDepth: maxDepth ?? MAX_TREE_DEPTH,
+          maxEntries,
+        });
+        const { truncated = false, ...treeResult } = tree;
         return structuredResult({
           project: scope.project.name,
-          tree: boundedTree.tree,
-          truncated: boundedTree.truncated,
+          tree: treeResult,
+          truncated,
         });
       } catch (error) {
         return toolError(error);
@@ -137,61 +140,6 @@ function listSafeProjects(dataRoot: string) {
   }));
 }
 
-function limitTree(
-  tree: KnowledgeTree,
-  maxDepth: number,
-  maxEntries: number,
-): { tree: KnowledgeTree; truncated: boolean } {
-  let remaining = maxEntries;
-  let truncated = false;
-
-  const limitCategory = (category: CategoryTreeNode): CategoryTreeNode => {
-    const categories: CategoryTreeNode[] = [];
-    const documents: typeof category.documents = [];
-    for (const child of category.categories) {
-      if (child.depth > maxDepth) continue;
-      if (remaining === 0) {
-        truncated = true;
-        break;
-      }
-      remaining -= 1;
-      categories.push(limitCategory(child));
-    }
-    for (const document of category.documents) {
-      if (document.depth > maxDepth) continue;
-      if (remaining === 0) {
-        truncated = true;
-        break;
-      }
-      remaining -= 1;
-      documents.push(document);
-    }
-    return { ...category, categories, documents };
-  };
-
-  const categories: CategoryTreeNode[] = [];
-  const documents: KnowledgeTree['documents'] = [];
-  for (const category of tree.categories) {
-    if (category.depth > maxDepth) continue;
-    if (remaining === 0) {
-      truncated = true;
-      break;
-    }
-    remaining -= 1;
-    categories.push(limitCategory(category));
-  }
-  for (const document of tree.documents) {
-    if (document.depth > maxDepth) continue;
-    if (remaining === 0) {
-      truncated = true;
-      break;
-    }
-    remaining -= 1;
-    documents.push(document);
-  }
-  return { tree: { path: '', depth: 0, categories, documents }, truncated };
-}
-
 function structuredResult(value: Record<string, unknown>) {
   return {
     content: [{ type: 'text' as const, text: JSON.stringify(value) }],
@@ -201,7 +149,7 @@ function structuredResult(value: Record<string, unknown>) {
 
 function toolError(error: unknown) {
   const message = error instanceof InputError
-    ? error.message
+    ? 'The MCP request has invalid or unavailable project input.'
     : error instanceof QLMError
       ? 'The requested project data is unavailable.'
       : 'The MCP request could not be completed.';

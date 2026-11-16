@@ -10,6 +10,18 @@ export interface KnowledgeTree {
   depth: 0;
   categories: CategoryTreeNode[];
   documents: DocumentTreeNode[];
+  truncated?: boolean;
+}
+
+export interface KnowledgeTreeOptions {
+  maxDepth?: number;
+  maxEntries?: number;
+}
+
+interface TreeScanBudget {
+  maxDepth: number;
+  remaining: number;
+  truncated: boolean;
 }
 
 export interface CategoryTreeNode {
@@ -37,9 +49,24 @@ interface DirectoryTreeContents {
   documents: DocumentTreeNode[];
 }
 
-export function buildKnowledgeTree(knowledgeRoot: string): KnowledgeTree {
+export function buildKnowledgeTree(
+  knowledgeRoot: string,
+  options: KnowledgeTreeOptions = {},
+): KnowledgeTree {
   if (knowledgeRoot.trim().length === 0) {
     throw new InputError('Knowledge root must be a non-empty path.');
+  }
+  if (
+    options.maxDepth !== undefined
+    && (!Number.isSafeInteger(options.maxDepth) || options.maxDepth < 0)
+  ) {
+    throw new InputError('Knowledge tree maxDepth must be a non-negative safe integer.');
+  }
+  if (
+    options.maxEntries !== undefined
+    && (!Number.isSafeInteger(options.maxEntries) || options.maxEntries < 1)
+  ) {
+    throw new InputError('Knowledge tree maxEntries must be a positive safe integer.');
   }
 
   const requestedRoot = resolve(knowledgeRoot);
@@ -53,12 +80,20 @@ export function buildKnowledgeTree(knowledgeRoot: string): KnowledgeTree {
   }
 
   const root = resolveKnowledgeRoot(requestedRoot);
-  const contents = scanDirectory(root, root, '');
+  const budget: TreeScanBudget = {
+    maxDepth: options.maxDepth ?? Number.MAX_SAFE_INTEGER,
+    remaining: options.maxEntries ?? Number.MAX_SAFE_INTEGER,
+    truncated: false,
+  };
+  const contents = scanDirectory(root, root, '', budget);
   return {
     path: '',
     depth: 0,
     categories: contents.categories,
     documents: contents.documents,
+    ...(options.maxDepth === undefined && options.maxEntries === undefined
+      ? {}
+      : { truncated: budget.truncated }),
   };
 }
 
@@ -66,6 +101,7 @@ function scanDirectory(
   root: string,
   directoryPath: string,
   relativeDirectoryPath: string,
+  budget: TreeScanBudget,
 ): DirectoryTreeContents {
   let entries: Dirent[];
   try {
@@ -94,7 +130,17 @@ function scanDirectory(
       : `${relativeDirectoryPath}/${entry.name}`;
 
     if (entry.isDirectory()) {
-      const contents = scanDirectory(root, entryPath, relativePath);
+      const childDepth = depth + 1;
+      if (childDepth > budget.maxDepth) {
+        budget.truncated = true;
+        continue;
+      }
+      if (budget.remaining === 0) {
+        budget.truncated = true;
+        break;
+      }
+      budget.remaining -= 1;
+      const contents = scanDirectory(root, entryPath, relativePath, budget);
       categories.push({
         type: 'category',
         name: entry.name,
@@ -131,6 +177,17 @@ function scanDirectory(
       continue;
     }
 
+    const documentDepth = depth + 1;
+    if (documentDepth > budget.maxDepth) {
+      budget.truncated = true;
+      continue;
+    }
+    if (budget.remaining === 0) {
+      budget.truncated = true;
+      break;
+    }
+    budget.remaining -= 1;
+
     const documentPath = toPortableRelativePath(root, entryPath);
     const document = readStoredMarkdownDocument(root, documentPath);
     documents.push({
@@ -139,7 +196,7 @@ function scanDirectory(
       id: document.metadata.id,
       title: document.metadata.title,
       path: documentPath,
-      depth: depth + 1,
+      depth: documentDepth,
     });
   }
 
