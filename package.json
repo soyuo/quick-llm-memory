@@ -13,6 +13,7 @@
     "test": "vitest run"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^24.19.2",
     "tsup": "^9.0.0",
     "typescript": "^7.0.2",
@@ -22,6 +23,7 @@
     "qlm": "./dist/index.js"
   },
   "dependencies": {
+    "better-sqlite3": "^13.2.0",
     "commander": "^15.1.0",
     "pino": "^10.4.0",
     "remark-frontmatter": "^5.0.0",
