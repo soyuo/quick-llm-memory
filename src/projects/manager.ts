@@ -1,7 +1,11 @@
 import {
+  closeSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
+  rmdirSync,
+  unlinkSync,
   writeFileSync,
   type Dirent,
 } from 'node:fs';
@@ -61,9 +65,33 @@ export function initializeProject(
     updated_at: timestamp,
   });
 
+  let metadataFileDescriptor: number | undefined;
   try {
-    writeFileSync(metadataPath, stringifyYaml(metadata), { flag: 'wx' });
+    metadataFileDescriptor = openSync(metadataPath, 'wx');
+    writeFileSync(metadataFileDescriptor, stringifyYaml(metadata), 'utf8');
+    closeSync(metadataFileDescriptor);
+    metadataFileDescriptor = undefined;
   } catch (error) {
+    if (metadataFileDescriptor !== undefined) {
+      try {
+        closeSync(metadataFileDescriptor);
+      } catch {
+        // Preserve the original write error.
+      }
+
+      try {
+        unlinkSync(metadataPath);
+      } catch {
+        // Cleanup is best-effort; preserve the original write error.
+      }
+    }
+
+    try {
+      rmdirSync(projectDirectory);
+    } catch {
+      // Keep any concurrent files; remove only an empty project directory.
+    }
+
     throw new InternalError('Unable to write project metadata.', {
       cause: error,
       suggestedAction: 'Check that the project directory is writable.',
