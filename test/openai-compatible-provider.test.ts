@@ -95,6 +95,28 @@ describe('OpenAI-compatible provider', () => {
     });
   });
 
+  it('forwards an abort signal to the provider request', async () => {
+    const controller = new AbortController();
+    let receivedSignal: AbortSignal | null | undefined;
+    const provider = createProvider({
+      fetch: async (_input, init) => {
+        receivedSignal = init?.signal;
+        return jsonResponse({
+          choices: [{ message: { content: '{"title":"Guide"}' } }],
+        });
+      },
+    });
+
+    await provider.generateStructured<{ title: string }>({
+      model: 'requested-model',
+      prompt: 'Return a title.',
+      schema: { type: 'object', properties: { title: { type: 'string' } } },
+      signal: controller.signal,
+    });
+
+    expect(receivedSignal).toBe(controller.signal);
+  });
+
   it('rejects non-JSON structured content with a typed provider error', async () => {
     const provider = createProvider({
       fetch: async () =>

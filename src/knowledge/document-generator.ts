@@ -20,6 +20,7 @@ export interface DocumentGeneratorOptions {
   temperature?: number;
   maxTokens?: number;
   clock?: () => Date;
+  signal?: AbortSignal;
 }
 
 export interface GeneratedDocumentContent {
@@ -96,6 +97,7 @@ export async function generateMarkdownDocument(
     }),
     temperature: options.temperature ?? 0,
     ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
     schemaName: 'qlm_generated_document_content',
     schema: GENERATED_DOCUMENT_CONTENT_SCHEMA,
   });

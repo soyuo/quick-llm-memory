@@ -123,6 +123,7 @@ export class OpenAICompatibleProvider implements AIProvider {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
+      ...(request.signal === undefined ? {} : { signal: request.signal }),
     });
     if (!isJsonObject(payload) || !Array.isArray(payload.choices)) {
       throw new ProviderError('Provider returned an invalid completion.');
