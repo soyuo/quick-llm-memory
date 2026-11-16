@@ -49,11 +49,12 @@ describe('project SQLite database', () => {
         .prepare(
           `SELECT name FROM sqlite_schema
            WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+             AND name NOT GLOB 'document_fts_*'
            ORDER BY name`,
         )
         .pluck()
         .all(),
-    ).toEqual(['categories', 'document_relations', 'documents', 'projects']);
+    ).toEqual(['categories', 'document_fts', 'document_relations', 'documents', 'projects']);
     expect(
       database.prepare('SELECT id, name, root_path FROM projects').get(),
     ).toEqual({
@@ -138,6 +139,63 @@ describe('project SQLite database', () => {
     expect(
       second.prepare('SELECT count(*) AS count FROM projects').get(),
     ).toEqual({ count: 1 });
+  });
+
+  it('migrates a version 1 database to FTS5 without changing existing rows', () => {
+    const { projectRoot, project } = createProject();
+    const original = openDatabase(projectRoot, project);
+    original.prepare(`
+      INSERT INTO documents (
+        id, project_id, path, title, category_id, depth, content_hash,
+        status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'existing-doc', project.id, 'security/existing.md', 'Existing', null, 2,
+      'hash', 'verified', project.created_at, project.updated_at,
+    );
+    original.exec('DROP TABLE document_fts');
+    original.pragma('user_version = 1');
+    original.close();
+
+    const migrated = openDatabase(projectRoot, project);
+    expect(migrated.pragma('user_version', { simple: true })).toBe(
+      PROJECT_DATABASE_SCHEMA_VERSION,
+    );
+    expect(migrated.prepare('SELECT id, path, title FROM documents').get()).toEqual({
+      id: 'existing-doc',
+      path: 'security/existing.md',
+      title: 'Existing',
+    });
+    expect(
+      migrated.prepare("SELECT sql FROM sqlite_schema WHERE name = 'document_fts'").get(),
+    ).toMatchObject({ sql: expect.stringMatching(/USING fts5/i) });
+  });
+
+  it('refuses conflicting FTS objects without promoting a version 1 database', () => {
+    const { projectRoot, project } = createProject();
+    const original = openDatabase(projectRoot, project);
+    original.prepare(`
+      INSERT INTO documents (
+        id, project_id, path, title, category_id, depth, content_hash,
+        status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'preserved-doc', project.id, 'preserved.md', 'Preserved', null, 1,
+      'hash', 'verified', project.created_at, project.updated_at,
+    );
+    original.exec('DROP TABLE document_fts; CREATE TABLE document_fts (legacy TEXT)');
+    original.prepare('INSERT INTO document_fts (legacy) VALUES (?)').run('preserve me');
+    original.pragma('user_version = 1');
+    original.close();
+
+    expect(() => openProjectDatabase(projectRoot, project)).toThrow(ConfigurationError);
+    const unchanged = new Database(resolveProjectDatabasePath(projectRoot), { readonly: true });
+    expect(unchanged.pragma('user_version', { simple: true })).toBe(1);
+    expect(unchanged.prepare('SELECT id FROM documents').get()).toEqual({ id: 'preserved-doc' });
+    expect(unchanged.prepare('SELECT legacy FROM document_fts').get()).toEqual({
+      legacy: 'preserve me',
+    });
+    unchanged.close();
   });
 
   it('rejects a database schema version newer than the application supports', () => {

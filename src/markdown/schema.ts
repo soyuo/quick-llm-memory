@@ -20,6 +20,7 @@ export const documentFrontmatterSchema = z
     ...frontmatterBaseSchema,
     type: z.literal('document'),
     status: z.string().min(1),
+    description: z.string().min(1).optional(),
     category: z.string().min(1).optional(),
     tags: z.array(z.string().min(1)).optional(),
     source_ids: z.array(z.string().min(1)).optional(),

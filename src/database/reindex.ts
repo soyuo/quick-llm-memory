@@ -29,6 +29,7 @@ interface IndexedCategory {
 interface IndexedDocument {
   metadata: DocumentFrontmatter;
   path: string;
+  body: string;
   contentHash: string;
   categoryId: string | null;
 }
@@ -77,6 +78,7 @@ export function rebuildProjectIndex(
   try {
     const rebuild = database.transaction(() => {
       database.prepare('DELETE FROM document_relations').run();
+      database.prepare('DELETE FROM document_fts').run();
       database.prepare('DELETE FROM documents WHERE project_id = ?').run(project.id);
 
       const existingCategoryIds = database
@@ -104,6 +106,11 @@ export function rebuildProjectIndex(
           @status, @createdAt, @updatedAt
         )
       `);
+      const insertFtsDocument = database.prepare(`
+        INSERT INTO document_fts (
+          document_id, title, path, tags, description, content
+        ) VALUES (@id, @title, @path, @tags, @description, @content)
+      `);
       for (const document of documents) {
         insertDocument.run({
           id: document.metadata.id,
@@ -116,6 +123,14 @@ export function rebuildProjectIndex(
           status: document.metadata.status,
           createdAt: document.metadata.created_at ?? project.created_at,
           updatedAt: document.metadata.updated_at ?? project.created_at,
+        });
+        insertFtsDocument.run({
+          id: document.metadata.id,
+          title: document.metadata.title,
+          path: document.path,
+          tags: (document.metadata.tags ?? []).join(' '),
+          description: document.metadata.description ?? '',
+          content: document.body,
         });
       }
 
@@ -254,6 +269,7 @@ function indexDocument(
   return {
     metadata: source.document.metadata,
     path: treeDocument.path,
+    body: source.document.body,
     contentHash: createHash('sha256').update(source.sourceText).digest('hex'),
     categoryId,
   };

@@ -111,6 +111,47 @@ describe('project SQLite index rebuild', () => {
     expect(readIndex(projectRoot).documents.map(({ id }) => id)).toEqual(['note-1']);
   });
 
+  it('synchronizes FTS fields when documents change or disappear', () => {
+    const { projectRoot, project, knowledgeRoot } = createProject();
+    const firstPath = join(knowledgeRoot, 'one.md');
+    const removedPath = join(knowledgeRoot, 'removed.md');
+    writeFileSync(firstPath, document('one', 'First title', 1, undefined, [], {
+      tags: ['alpha', 'security'],
+      description: 'First description',
+      body: 'Searchable body text',
+    }), 'utf8');
+    writeFileSync(removedPath, document('removed', 'Remove me', 1), 'utf8');
+    rebuildProjectIndex(projectRoot, project);
+
+    const initial = readIndex(projectRoot).fts;
+    expect(initial).toContainEqual({
+      document_id: 'one',
+      title: 'First title',
+      path: 'one.md',
+      tags: 'alpha security',
+      description: 'First description',
+      content: '\n\n# First title\n\nSearchable body text\n',
+    });
+    expect(initial).toContainEqual(expect.objectContaining({ document_id: 'removed' }));
+
+    writeFileSync(firstPath, document('one', 'Updated title', 1, undefined, [], {
+      tags: ['beta'],
+      description: 'Updated description',
+      body: 'Updated indexed body',
+    }), 'utf8');
+    rmSync(removedPath);
+    rebuildProjectIndex(projectRoot, project);
+
+    expect(readIndex(projectRoot).fts).toEqual([{
+      document_id: 'one',
+      title: 'Updated title',
+      path: 'one.md',
+      tags: 'beta',
+      description: 'Updated description',
+      content: '\n\n# Updated title\n\nUpdated indexed body\n',
+    }]);
+  });
+
   it('preserves the current index and Markdown when source metadata is invalid', () => {
     const { projectRoot, project, knowledgeRoot } = createProject();
     const originalPath = join(knowledgeRoot, 'existing.md');
@@ -179,6 +220,7 @@ function document(
   depth: number,
   category?: string,
   related: string[] = [],
+  extra: { tags?: string[]; description?: string; body?: string } = {},
 ): string {
   const metadata = [
     '---',
@@ -189,11 +231,14 @@ function document(
     `depth: ${depth}`,
     'status: verified',
     ...(category === undefined ? [] : [`category: ${category}`]),
+    ...(extra.tags === undefined ? [] : ['tags:', ...extra.tags.map((tag) => `  - ${tag}`)]),
+    ...(extra.description === undefined ? [] : [`description: ${extra.description}`]),
     ...(related.length === 0 ? [] : ['related:', ...related.map((idValue) => `  - ${idValue}`)]),
     '---',
     '',
     `# ${title}`,
     '',
+    ...(extra.body === undefined ? [] : [extra.body, '']),
   ];
   return metadata.join('\n');
 }
@@ -236,6 +281,19 @@ function readIndex(projectRoot: string) {
         source_id: string;
         target_id: string;
         relation_type: string;
+      }>,
+      fts: database
+        .prepare(`
+          SELECT document_id, title, path, tags, description, content
+          FROM document_fts ORDER BY path
+        `)
+        .all() as Array<{
+        document_id: string;
+        title: string;
+        path: string;
+        tags: string;
+        description: string;
+        content: string;
       }>,
     };
   } finally {
