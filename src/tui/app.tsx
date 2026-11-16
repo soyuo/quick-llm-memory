@@ -1,7 +1,13 @@
 import React, { useMemo, useState } from 'react';
 import { Box, Text, render, useApp, useInput, useWindowSize } from 'ink';
 import { resolveSettingsPaths } from '../config/paths.js';
-import { InputError } from '../errors/qlm-error.js';
+import { InputError, InternalError } from '../errors/qlm-error.js';
+import {
+  deleteProject,
+  initializeProject,
+  renameProject,
+  setProjectArchived,
+} from '../projects/manager.js';
 import { loadTuiDashboardSnapshot } from './dashboard.js';
 
 export const TUI_SCREENS = [
@@ -17,6 +23,13 @@ export const TUI_SCREENS = [
 
 export type TuiScreen = (typeof TUI_SCREENS)[number];
 export type TuiLayout = 'wide' | 'compact' | 'too-small';
+
+type ProjectAction =
+  | { kind: 'idle' }
+  | { kind: 'create'; value: string }
+  | { kind: 'rename'; projectName: string; value: string }
+  | { kind: 'confirm-archive'; projectName: string; archived: boolean }
+  | { kind: 'confirm-delete'; projectName: string; value: string };
 
 export function getTuiLayout(columns: number, rows: number): TuiLayout {
   if (columns < 60 || rows < 16) {
@@ -45,6 +58,8 @@ export function TuiApp({ columns, rows, dataRoot, onExit }: TuiAppProps): React.
   const [activeScreen, setActiveScreen] = useState<TuiScreen | undefined>();
   const [selectedProjectName, setSelectedProjectName] = useState<string | undefined>();
   const [projectCursorName, setProjectCursorName] = useState<string | undefined>();
+  const [projectAction, setProjectAction] = useState<ProjectAction>({ kind: 'idle' });
+  const [projectMessage, setProjectMessage] = useState<string | undefined>();
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [focusedPane, setFocusedPane] = useState<'navigation' | 'content'>(
     'navigation',
@@ -64,6 +79,90 @@ export function TuiApp({ columns, rows, dataRoot, onExit }: TuiAppProps): React.
   const { exit } = useApp();
 
   useInput((input, key) => {
+    if (activeScreen === 'Projects' && projectAction.kind !== 'idle') {
+      if (key.escape) {
+        setProjectAction({ kind: 'idle' });
+        setProjectMessage('Project action cancelled.');
+        return;
+      }
+
+      if (projectAction.kind === 'confirm-archive') {
+        if (input.toLowerCase() === 'y') {
+          try {
+            setProjectArchived(root, projectAction.projectName, projectAction.archived);
+            setRefreshVersion((version) => version + 1);
+            setProjectCursorName(projectAction.projectName);
+            setProjectMessage(projectAction.archived
+              ? `Archived project ${projectAction.projectName}.`
+              : `Restored project ${projectAction.projectName}.`);
+          } catch (error) {
+            setProjectMessage(getSafeProjectError(error));
+          }
+          setProjectAction({ kind: 'idle' });
+        } else if (input.toLowerCase() === 'n') {
+          setProjectAction({ kind: 'idle' });
+          setProjectMessage('Project action cancelled.');
+        }
+        return;
+      }
+
+      if (projectAction.kind === 'confirm-delete') {
+        if (key.backspace || key.delete) {
+          setProjectAction({ ...projectAction, value: projectAction.value.slice(0, -1) });
+        } else if (key.return) {
+          if (projectAction.value !== projectAction.projectName) {
+            setProjectMessage('The project name did not match; nothing was deleted.');
+            return;
+          }
+          try {
+            deleteProject(root, projectAction.projectName, projectAction.value);
+            if (selectedProjectName === projectAction.projectName) {
+              setSelectedProjectName(undefined);
+            }
+            setProjectCursorName(undefined);
+            setRefreshVersion((version) => version + 1);
+            setProjectMessage(`Deleted project ${projectAction.projectName}.`);
+          } catch (error) {
+            setProjectMessage(getSafeProjectError(error));
+          }
+          setProjectAction({ kind: 'idle' });
+        } else if (isTextInput(input, key)) {
+          setProjectAction({ ...projectAction, value: projectAction.value + input });
+          setProjectMessage(undefined);
+        }
+        return;
+      }
+
+      if (key.backspace || key.delete) {
+        setProjectAction({ ...projectAction, value: projectAction.value.slice(0, -1) });
+      } else if (key.return) {
+        try {
+          if (projectAction.kind === 'create') {
+            const project = initializeProject(root, projectAction.value);
+            setProjectCursorName(project.name);
+            setSelectedProjectName(project.name);
+            setRefreshVersion((version) => version + 1);
+            setProjectMessage(`Created project ${project.name}.`);
+          } else {
+            const project = renameProject(root, projectAction.projectName, projectAction.value);
+            setProjectCursorName(project.name);
+            if (selectedProjectName === projectAction.projectName) {
+              setSelectedProjectName(project.name);
+            }
+            setRefreshVersion((version) => version + 1);
+            setProjectMessage(`Renamed project to ${project.name}.`);
+          }
+          setProjectAction({ kind: 'idle' });
+        } catch (error) {
+          setProjectMessage(getSafeProjectError(error));
+        }
+      } else if (isTextInput(input, key)) {
+        setProjectAction({ ...projectAction, value: projectAction.value + input });
+        setProjectMessage(undefined);
+      }
+      return;
+    }
+
     if (input.toLowerCase() === 'q' || (key.ctrl && input.toLowerCase() === 'c')) {
       onExit?.();
       exit();
@@ -112,6 +211,31 @@ export function TuiApp({ columns, rows, dataRoot, onExit }: TuiAppProps): React.
         }
         return;
       }
+
+      const project = dashboard.projects[projectSelectionIndex];
+      if (input.toLowerCase() === 'c') {
+        setProjectMessage(undefined);
+        setProjectAction({ kind: 'create', value: '' });
+        return;
+      }
+      if (project === undefined) {
+        return;
+      }
+      if (input.toLowerCase() === 'n') {
+        setProjectMessage(undefined);
+        setProjectAction({ kind: 'rename', projectName: project.name, value: '' });
+      } else if (input.toLowerCase() === 'a') {
+        setProjectMessage(undefined);
+        setProjectAction({
+          kind: 'confirm-archive',
+          projectName: project.name,
+          archived: project.archived_at === undefined,
+        });
+      } else if (input.toLowerCase() === 'd') {
+        setProjectMessage(undefined);
+        setProjectAction({ kind: 'confirm-delete', projectName: project.name, value: '' });
+      }
+      return;
     }
 
     if (key.upArrow && focusedPane === 'navigation') {
@@ -193,10 +317,28 @@ export function TuiApp({ columns, rows, dataRoot, onExit }: TuiAppProps): React.
             <Text key={project.id}>
               {index === projectSelectionIndex ? '› ' : '  '}
               {project.name}
+              {project.archived_at === undefined ? '' : ' [archived]'}
               {project.name === currentProjectName ? ' [selected project]' : ''}
             </Text>
           ))}
-          <Text>Use arrows to choose a project and Enter to select.</Text>
+          {projectAction.kind === 'create' ? (
+            <Text>New project name: {projectAction.value}_ (Enter create, Esc cancel)</Text>
+          ) : null}
+          {projectAction.kind === 'rename' ? (
+            <Text>Rename {projectAction.projectName} to: {projectAction.value}_ (Enter save, Esc cancel)</Text>
+          ) : null}
+          {projectAction.kind === 'confirm-archive' ? (
+            <Text>
+              {projectAction.archived ? 'Archive' : 'Restore'} project {projectAction.projectName}? Press y to confirm, n to cancel.
+            </Text>
+          ) : null}
+          {projectAction.kind === 'confirm-delete' ? (
+            <Text>
+              Delete {projectAction.projectName}? Type the exact name: {projectAction.value}_ (Enter delete, Esc cancel)
+            </Text>
+          ) : null}
+          {projectMessage ? <Text>{projectMessage}</Text> : null}
+          <Text>Arrows choose; Enter selects; c creates; n renames; a archives/restores; d deletes.</Text>
         </>
       ) : (
         <Text>{activeScreen} screen is not available yet.</Text>
@@ -223,6 +365,28 @@ export function TuiApp({ columns, rows, dataRoot, onExit }: TuiAppProps): React.
       </Text>
     </Box>
   );
+}
+
+function isTextInput(
+  input: string,
+  key: {
+    ctrl?: boolean;
+    meta?: boolean;
+    upArrow?: boolean;
+    downArrow?: boolean;
+    leftArrow?: boolean;
+    rightArrow?: boolean;
+  },
+): boolean {
+  return input.length > 0 && !key.ctrl && !key.meta && !key.upArrow
+    && !key.downArrow && !key.leftArrow && !key.rightArrow;
+}
+
+function getSafeProjectError(error: unknown): string {
+  if (error instanceof InputError || error instanceof InternalError) {
+    return error.message;
+  }
+  return 'Project action failed. Refresh and check project data and permissions.';
 }
 
 export async function launchTui(dataRoot = resolveSettingsPaths().dataRoot): Promise<void> {

@@ -153,6 +153,30 @@ describe('project management', () => {
     expect(listProjects(dataRoot).map(({ name }) => name)).toEqual(['first', 'second']);
   });
 
+  it('rolls back the project directory when renamed metadata cannot be written', () => {
+    const dataRoot = createTemporaryDirectory('qlm-project-rename-failure-');
+    initializeProject(dataRoot, 'before');
+    const originalRenameSync = fs.renameSync;
+    fs.renameSync = ((source: string, destination: string) => {
+      if (source.includes('.project-')) {
+        throw new Error('simulated metadata replacement failure');
+      }
+      originalRenameSync(source, destination);
+    }) as typeof fs.renameSync;
+    syncBuiltinESMExports();
+
+    try {
+      expect(() => renameProject(dataRoot, 'before', 'after')).toThrow(InternalError);
+    } finally {
+      fs.renameSync = originalRenameSync;
+      syncBuiltinESMExports();
+    }
+
+    expect(existsSync(join(dataRoot, 'projects', 'before'))).toBe(true);
+    expect(existsSync(join(dataRoot, 'projects', 'after'))).toBe(false);
+    expect(listProjects(dataRoot).map(({ name }) => name)).toEqual(['before']);
+  });
+
   it('archives and restores a project through metadata without moving its data', () => {
     const dataRoot = createTemporaryDirectory('qlm-project-archive-');
     initializeProject(dataRoot, 'saved');
