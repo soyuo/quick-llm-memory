@@ -1,27 +1,25 @@
-import { readFileSync } from 'node:fs';
 import { Command, CommanderError } from 'commander';
 import { InternalError, QLMError } from './errors/qlm-error.js';
+import { packageMetadata } from './package-metadata.js';
 import {
   registerProjectCommands,
   type ProjectCommandOptions,
 } from './projects/commands.js';
+import {
+  registerMcpCommands,
+  type McpCommandOptions,
+} from './mcp/commands.js';
 
-interface PackageMetadata {
-  description: string;
-  version: string;
-}
+export type CliOptions = ProjectCommandOptions & McpCommandOptions;
 
-const packageMetadata = JSON.parse(
-  readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
-) as PackageMetadata;
-
-export function createCli(options: ProjectCommandOptions = {}): Command {
+export function createCli(options: CliOptions = {}): Command {
   const cli = new Command()
     .name('qlm')
     .description(packageMetadata.description)
     .version(packageMetadata.version);
 
   registerProjectCommands(cli, options);
+  registerMcpCommands(cli, options);
   return cli;
 }
 
@@ -33,7 +31,7 @@ export interface CliOutput {
 export async function runCli(
   argv: string[] = process.argv,
   output: CliOutput = {},
-  options: ProjectCommandOptions = {},
+  options: CliOptions = {},
 ): Promise<number> {
   const writeError =
     output.writeError ?? ((text: string) => process.stderr.write(text));
