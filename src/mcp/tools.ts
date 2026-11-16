@@ -8,6 +8,7 @@ import { listProjects } from '../projects/manager.js';
 import { validateProjectName } from '../projects/schema.js';
 import { searchProjectDocuments } from '../retrieval/search.js';
 import { assertMcpOperationAllowed, resolveMcpProjectScope } from './access.js';
+import { registerMcpDocumentTools } from './document-tools.js';
 
 export interface RegisterMcpToolsOptions {
   dataRoot: string;
@@ -101,6 +102,8 @@ export function registerMcpTools(
       }
     },
   );
+
+  registerMcpDocumentTools(server, options);
 }
 
 function listSafeProjects(dataRoot: string) {
