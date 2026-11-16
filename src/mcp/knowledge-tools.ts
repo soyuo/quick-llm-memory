@@ -33,6 +33,11 @@ export function registerMcpKnowledgeTools(
     ({ project, query, mode, max_tokens, max_results, max_depth, include_related, max_related_results }) => {
       assertMcpOperationAllowed('read');
       try {
+        if (
+          max_depth !== undefined && mode !== 'hierarchical' && mode !== 'hybrid'
+        ) {
+          throw new InputError('max_depth applies only to hierarchical and hybrid retrieval.');
+        }
         const scope = resolveMcpProjectScope(options.dataRoot, project);
         const context = buildRetrievalContext({
           projectId: scope.project.id,
