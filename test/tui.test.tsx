@@ -33,8 +33,7 @@ describe('TUI shell', () => {
     expect(app.lastFrame()).toContain('No projects yet.');
 
     app.stdin.write('\u001b');
-    await flushInkEffects();
-    expect(app.lastFrame()).toContain('› Projects [selected]');
+    await waitForFrame(app, '› Projects [selected]');
 
     app.unmount();
   });
@@ -98,4 +97,18 @@ function createDataRoot(): string {
 
 function flushInkEffects(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function waitForFrame(
+  app: ReturnType<typeof render>,
+  expected: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    if ((app.lastFrame() ?? '').includes(expected)) {
+      return;
+    }
+    await flushInkEffects();
+  }
+
+  expect(app.lastFrame() ?? '').toContain(expected);
 }

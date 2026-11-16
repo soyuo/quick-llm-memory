@@ -102,6 +102,74 @@ describe('TUI project lifecycle actions', () => {
     expect(readFileSync(outsidePath, 'utf8')).toBe('keep this file');
     app.unmount();
   });
+
+  it('imports and exports project directories through confirmed keyboard prompts', async () => {
+    const dataRoot = createDataRoot();
+    const sourceRoot = createDataRoot();
+    const exportRoot = createDataRoot();
+    initializeProject(sourceRoot, 'portable-project');
+    const sourceDirectory = join(sourceRoot, 'projects', 'portable-project');
+    mkdirSync(join(sourceDirectory, 'knowledge'));
+    writeFileSync(join(sourceDirectory, 'knowledge', 'notes.md'), '# Portable');
+    const exportDirectory = join(exportRoot, 'portable-export');
+    const app = render(<TuiApp columns={120} rows={30} dataRoot={dataRoot} />);
+    await openProjects(app);
+
+    app.stdin.write('i');
+    await flushInkEffects();
+    app.stdin.write(sourceDirectory);
+    await flushInkEffects();
+    app.stdin.write('\r');
+    await waitForFrame(app, 'Import as project name:');
+    expect(app.lastFrame()).toContain('Import as project name: portable-project');
+    app.stdin.write('\r');
+    await flushInkEffects();
+    expect(app.lastFrame()).toContain('Press y to copy');
+    app.stdin.write('y');
+    await waitForFrame(app, 'Imported project portable-project.');
+
+    expect(readFileSync(
+      join(dataRoot, 'projects', 'portable-project', 'knowledge', 'notes.md'),
+      'utf8',
+    )).toBe('# Portable');
+    app.stdin.write('e');
+    await flushInkEffects();
+    app.stdin.write(exportDirectory);
+    await flushInkEffects();
+    app.stdin.write('\r');
+    await flushInkEffects();
+    expect(app.lastFrame()).toContain('Press y to copy');
+    app.stdin.write('y');
+    await waitForFrame(app, 'Exported project portable-project.');
+
+    expect(readFileSync(join(exportDirectory, 'knowledge', 'notes.md'), 'utf8'))
+      .toBe('# Portable');
+    expect(existsSync(sourceDirectory)).toBe(true);
+    app.unmount();
+  });
+
+  it('cancels import before commit without creating a project', async () => {
+    const dataRoot = createDataRoot();
+    const sourceRoot = createDataRoot();
+    initializeProject(sourceRoot, 'cancel-source');
+    const sourceDirectory = join(sourceRoot, 'projects', 'cancel-source');
+    const app = render(<TuiApp columns={120} rows={30} dataRoot={dataRoot} />);
+    await openProjects(app);
+
+    app.stdin.write('i');
+    await flushInkEffects();
+    app.stdin.write(sourceDirectory);
+    await flushInkEffects();
+    app.stdin.write('\r');
+    await waitForFrame(app, 'Import as project name:');
+    app.stdin.write('\r');
+    await waitForFrame(app, 'Press y to copy');
+    app.stdin.write('\u001b');
+    await waitForFrame(app, 'Project action cancelled.');
+    expect(existsSync(join(dataRoot, 'projects', 'cancel-source'))).toBe(false);
+    expect(existsSync(sourceDirectory)).toBe(true);
+    app.unmount();
+  });
 });
 
 function createDataRoot(): string {
@@ -120,4 +188,17 @@ function openProjects(app: ReturnType<typeof render>): Promise<void> {
 
 function flushInkEffects(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function waitForFrame(
+  app: ReturnType<typeof render>,
+  expected: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    if ((app.lastFrame() ?? '').includes(expected)) {
+      return;
+    }
+  }
+  throw new Error(`Timed out waiting for TUI output: ${expected}`);
 }
