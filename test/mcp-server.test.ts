@@ -1,4 +1,6 @@
+import { PassThrough } from 'node:stream';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
+import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { describe, expect, it, vi } from 'vitest';
 import { runCli } from '../src/cli.js';
 import { serveMcpStdio } from '../src/mcp/server.js';
@@ -16,6 +18,70 @@ describe('MCP server bootstrap', () => {
       await client.close();
       await handle.close();
     }
+  });
+
+  it('serves an in-process client over stdio streams with protocol-only output', async () => {
+    const clientInput = new PassThrough();
+    const serverOutput = new PassThrough();
+    const outputMessages: unknown[] = [];
+    const errors: Error[] = [];
+    let inputBuffer = '';
+    let outputText = '';
+    const clientTransport = {
+      onclose: undefined as (() => void) | undefined,
+      onerror: undefined as ((error: Error) => void) | undefined,
+      onmessage: undefined as ((message: unknown) => void) | undefined,
+      async start() {
+        serverOutput.on('data', (chunk: Buffer) => {
+          outputText += chunk.toString('utf8');
+          inputBuffer += chunk.toString('utf8');
+          const lines = inputBuffer.split('\n');
+          inputBuffer = lines.pop() ?? '';
+          for (const line of lines) {
+            if (!line) continue;
+            try {
+              const message: unknown = JSON.parse(line);
+              outputMessages.push(message);
+              this.onmessage?.(message);
+            } catch (error) {
+              this.onerror?.(error as Error);
+            }
+          }
+        });
+      },
+      async send(message: unknown) {
+        clientInput.write(`${JSON.stringify(message)}\n`);
+      },
+      async close() {
+        clientInput.end();
+        this.onclose?.();
+      },
+    };
+    const handle = serveMcpStdio({
+      transport: new StdioServerTransport(clientInput, serverOutput),
+      onError: (error) => errors.push(error),
+    });
+    const client = new Client({ name: 'qlm-stdio-test', version: '1.0.0' });
+
+    try {
+      await client.connect(clientTransport);
+      await client.ping();
+      await client.close();
+      await handle.close();
+    } finally {
+      await client.close().catch(() => {});
+      await handle.close();
+    }
+
+    expect(errors).toEqual([]);
+    expect(outputMessages.length).toBeGreaterThan(0);
+    expect(outputMessages.every((message) => (
+      typeof message === 'object'
+      && message !== null
+      && 'jsonrpc' in message
+      && message.jsonrpc === '2.0'
+    ))).toBe(true);
+    expect(outputText.trim().split('\n')).toHaveLength(outputMessages.length);
   });
 
   it('reports transport errors through the injected error handler', async () => {
