@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pino from 'pino';
@@ -96,5 +96,18 @@ describe('application logger', () => {
     expect(resolveLogFilePath('workspace-data')).toBe(
       join('workspace-data', 'logs', 'application.log'),
     );
+  });
+
+  it('writes log records to the application log file', async () => {
+    const dataRoot = mkdtempSync(join(tmpdir(), 'qlm-logger-file-'));
+    temporaryDirectories.push(dataRoot);
+    const logger = createApplicationLogger({ dataRoot, level: 'info' });
+
+    logger.info({ event: 'file.destination' }, 'Application started');
+    await logger.close();
+
+    const contents = readFileSync(resolveLogFilePath(dataRoot), 'utf8');
+    expect(contents).toContain('"event":"application.started"');
+    expect(contents).toContain('"event":"file.destination"');
   });
 });
