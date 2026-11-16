@@ -196,12 +196,9 @@ export function moveMarkdownDocument(
     });
   }
 
+  const quarantinePath = join(dirname(sourcePath), `.qlm-${randomUUID()}.move`);
   try {
-    const currentSourceContents = readFileSync(sourcePath);
-    if (!currentSourceContents.equals(sourceContents)) {
-      throw new Error('Source Markdown changed while it was being moved.');
-    }
-    unlinkSync(sourcePath);
+    renameSync(sourcePath, quarantinePath);
   } catch (cause) {
     try {
       unlinkSync(targetPath);
@@ -209,11 +206,43 @@ export function moveMarkdownDocument(
       // Keep the source as the authoritative copy if destination cleanup fails.
     }
 
+    throw new InternalError(`Unable to stage Markdown source for move: ${sourcePath}`, {
+      cause,
+      details: { sourcePath, targetPath },
+      suggestedAction: 'The source document was preserved; check permissions and retry.',
+    });
+  }
+
+  let quarantinedContents: Buffer;
+  try {
+    quarantinedContents = readFileSync(quarantinePath);
+  } catch (cause) {
+    restoreQuarantinedSource(quarantinePath, sourcePath, targetPath);
+    throw new InternalError(`Unable to verify Markdown source during move: ${sourcePath}`, {
+      cause,
+      details: { sourcePath, targetPath },
+      suggestedAction: 'The source document was restored; check permissions and retry.',
+    });
+  }
+
+  if (!quarantinedContents.equals(sourceContents)) {
+    const cause = new Error('Source Markdown changed while it was being moved.');
+    restoreQuarantinedSource(quarantinePath, sourcePath, targetPath);
+    throw new InternalError(`Markdown source changed during move: ${sourcePath}`, {
+      cause,
+      details: { sourcePath, targetPath },
+      suggestedAction: 'The changed source document was restored; retry the move.',
+    });
+  }
+
+  try {
+    unlinkSync(quarantinePath);
+  } catch (cause) {
+    restoreQuarantinedSource(quarantinePath, sourcePath, targetPath);
     throw new InternalError(`Unable to finish moving Markdown document: ${sourcePath}`, {
       cause,
       details: { sourcePath, targetPath },
-      suggestedAction:
-        'The source document was preserved; check directory permissions and retry.',
+      suggestedAction: 'The source document was restored; check permissions and retry.',
     });
   }
 
@@ -488,6 +517,33 @@ function writeFileAtomicallyReplacing(filePath: string, contents: string): void 
     }
     removeFileIfPresent(temporaryPath);
     throw cause;
+  }
+}
+
+function restoreQuarantinedSource(
+  quarantinePath: string,
+  sourcePath: string,
+  targetPath: string,
+): void {
+  try {
+    linkSync(quarantinePath, sourcePath);
+    unlinkSync(quarantinePath);
+  } catch (restoreCause) {
+    throw new InternalError(`Unable to restore Markdown source: ${sourcePath}`, {
+      cause: restoreCause,
+      details: { sourcePath, targetPath, recoveryPath: quarantinePath },
+      suggestedAction: `Recover the source from ${quarantinePath} before retrying.`,
+    });
+  }
+
+  try {
+    removeFileIfPresent(targetPath);
+  } catch (cause) {
+    throw new InternalError(`Source restored but move target remains: ${targetPath}`, {
+      cause,
+      details: { sourcePath, targetPath },
+      suggestedAction: 'Remove the incomplete target after verifying the restored source.',
+    });
   }
 }
 
