@@ -22,19 +22,25 @@ export interface CreateApplicationLoggerOptions {
   destination?: pino.DestinationStream;
 }
 
+export type ApplicationLogger = pino.Logger & {
+  close(): Promise<void>;
+};
+
 export function resolveLogFilePath(dataRoot: string): string {
   return join(dataRoot, 'logs', 'application.log');
 }
 
 export function createApplicationLogger(
   options: CreateApplicationLoggerOptions,
-): pino.Logger {
+): ApplicationLogger {
   const logFilePath = resolveLogFilePath(options.dataRoot);
   mkdirSync(dirname(logFilePath), { recursive: true });
 
-  const destination =
-    options.destination ??
-    pino.destination({ dest: logFilePath, sync: true });
+  const fileDestination =
+    options.destination === undefined
+      ? pino.destination({ dest: logFilePath, sync: true })
+      : undefined;
+  const destination = options.destination ?? fileDestination;
   const logger = pino(
     {
       name: 'quick-llm-memory',
@@ -48,7 +54,19 @@ export function createApplicationLogger(
   );
 
   logApplicationStarted(logger);
-  return logger;
+  return Object.assign(logger, {
+    close: () => {
+      if (fileDestination === undefined) {
+        return Promise.resolve();
+      }
+
+      return new Promise<void>((resolve, reject) => {
+        fileDestination.once('close', resolve);
+        fileDestination.once('error', reject);
+        fileDestination.end();
+      });
+    },
+  });
 }
 
 export function logApplicationStarted(logger: pino.Logger): void {
