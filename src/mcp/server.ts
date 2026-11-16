@@ -8,6 +8,7 @@ import { packageMetadata } from '../package-metadata.js';
 import { resolveSettingsPaths } from '../config/paths.js';
 import { registerMcpTools } from './tools.js';
 import { registerMcpResources } from './resources.js';
+import { registerMcpPrompts } from './prompts.js';
 
 export interface ServeMcpStdioOptions {
   transport?: ServeStdioOptions['transport'];
@@ -26,6 +27,7 @@ export function createMcpServer(options: CreateMcpServerOptions = {}): McpServer
   const dataRoot = options.dataRoot ?? resolveSettingsPaths().dataRoot;
   registerMcpTools(server, { dataRoot });
   registerMcpResources(server, { dataRoot });
+  registerMcpPrompts(server);
   return server;
 }
 
