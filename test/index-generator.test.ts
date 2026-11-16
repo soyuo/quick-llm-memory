@@ -23,6 +23,19 @@ afterEach(() => {
 });
 
 describe('category index generator', () => {
+  it('creates the knowledge root and its index when the root is missing', () => {
+    const knowledgeRoot = createKnowledgeRoot();
+
+    expect(generateCategoryIndexes(knowledgeRoot)).toEqual({
+      created: ['index.md'],
+      updated: [],
+      unchanged: [],
+    });
+    expect(readFileSync(join(knowledgeRoot, 'index.md'), 'utf8')).toContain(
+      'id: knowledge',
+    );
+  });
+
   it('creates root and nested indexes with deterministic relative links', () => {
     const knowledgeRoot = createKnowledgeRoot();
     createMarkdownDocument(knowledgeRoot, 'security/authentication.md', {
