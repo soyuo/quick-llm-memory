@@ -17,7 +17,13 @@ import { runCli } from '../src/cli.js';
 import { ConfigurationError } from '../src/config/error.js';
 import { InputError, InternalError } from '../src/errors/qlm-error.js';
 import { createApplicationLogger } from '../src/logging/logger.js';
-import { initializeProject, listProjects } from '../src/projects/manager.js';
+import {
+  deleteProject,
+  initializeProject,
+  listProjects,
+  renameProject,
+  setProjectArchived,
+} from '../src/projects/manager.js';
 import { projectMetadataSchema } from '../src/projects/schema.js';
 
 const temporaryDirectories: string[] = [];
@@ -115,6 +121,70 @@ describe('project management', () => {
     writeFileSync(join(projectDirectory, 'project.yaml'), 'id: [\n');
 
     expect(() => listProjects(dataRoot)).toThrow(ConfigurationError);
+  });
+
+  it('renames a project without changing its identity or project files', () => {
+    const dataRoot = createTemporaryDirectory('qlm-project-rename-');
+    const original = initializeProject(dataRoot, 'old-name');
+    const knowledgeFile = join(dataRoot, 'projects', 'old-name', 'knowledge', 'notes.md');
+    mkdirSync(join(dataRoot, 'projects', 'old-name', 'knowledge'));
+    writeFileSync(knowledgeFile, '# Keep this document\n');
+
+    const renamed = renameProject(dataRoot, 'old-name', 'new-name');
+
+    expect(renamed).toMatchObject({
+      id: original.id,
+      name: 'new-name',
+      created_at: original.created_at,
+    });
+    expect(renamed.updated_at).not.toBe(original.updated_at);
+    expect(existsSync(join(dataRoot, 'projects', 'old-name'))).toBe(false);
+    expect(readFileSync(join(dataRoot, 'projects', 'new-name', 'knowledge', 'notes.md'), 'utf8'))
+      .toBe('# Keep this document\n');
+    expect(listProjects(dataRoot).map(({ name }) => name)).toEqual(['new-name']);
+  });
+
+  it('rejects rename collisions without changing either project', () => {
+    const dataRoot = createTemporaryDirectory('qlm-project-rename-collision-');
+    initializeProject(dataRoot, 'first');
+    initializeProject(dataRoot, 'second');
+
+    expect(() => renameProject(dataRoot, 'first', 'second')).toThrow(InputError);
+    expect(listProjects(dataRoot).map(({ name }) => name)).toEqual(['first', 'second']);
+  });
+
+  it('archives and restores a project through metadata without moving its data', () => {
+    const dataRoot = createTemporaryDirectory('qlm-project-archive-');
+    initializeProject(dataRoot, 'saved');
+    const knowledgeDirectory = join(dataRoot, 'projects', 'saved', 'knowledge');
+    mkdirSync(knowledgeDirectory);
+    writeFileSync(join(knowledgeDirectory, 'notes.md'), 'still here');
+
+    const archived = setProjectArchived(dataRoot, 'saved', true);
+    expect(archived.archived_at).toBeDefined();
+    expect(listProjects(dataRoot)[0]?.archived_at).toBe(archived.archived_at);
+    expect(readFileSync(join(knowledgeDirectory, 'notes.md'), 'utf8')).toBe('still here');
+
+    const restored = setProjectArchived(dataRoot, 'saved', false);
+    expect(restored.archived_at).toBeUndefined();
+    expect(listProjects(dataRoot)[0]?.archived_at).toBeUndefined();
+    expect(readFileSync(join(knowledgeDirectory, 'notes.md'), 'utf8')).toBe('still here');
+  });
+
+  it('deletes only after exact-name confirmation and preserves neighboring projects', () => {
+    const dataRoot = createTemporaryDirectory('qlm-project-delete-');
+    initializeProject(dataRoot, 'remove-me');
+    initializeProject(dataRoot, 'keep-me');
+    const userFile = join(dataRoot, 'projects', 'remove-me', 'knowledge', 'notes.md');
+    mkdirSync(join(dataRoot, 'projects', 'remove-me', 'knowledge'));
+    writeFileSync(userFile, 'explicitly selected data');
+
+    expect(() => deleteProject(dataRoot, 'remove-me', 'remove')).toThrow(InputError);
+    expect(readFileSync(userFile, 'utf8')).toBe('explicitly selected data');
+
+    deleteProject(dataRoot, 'remove-me', 'remove-me');
+    expect(existsSync(join(dataRoot, 'projects', 'remove-me'))).toBe(false);
+    expect(listProjects(dataRoot).map(({ name }) => name)).toEqual(['keep-me']);
   });
 
   it('registers init and list commands and logs project creation', async () => {

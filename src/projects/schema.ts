@@ -24,6 +24,7 @@ export const projectMetadataSchema = z
     name: projectNameSchema,
     created_at: z.iso.datetime(),
     updated_at: z.iso.datetime(),
+    archived_at: z.iso.datetime().optional(),
   })
   .strict();
 
