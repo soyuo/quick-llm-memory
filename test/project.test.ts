@@ -6,6 +6,8 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pino from 'pino';
@@ -13,7 +15,7 @@ import { parse as parseYaml } from 'yaml';
 import { afterEach, describe, expect, it } from 'vitest';
 import { runCli } from '../src/cli.js';
 import { ConfigurationError } from '../src/config/error.js';
-import { InputError } from '../src/errors/qlm-error.js';
+import { InputError, InternalError } from '../src/errors/qlm-error.js';
 import { createApplicationLogger } from '../src/logging/logger.js';
 import { initializeProject, listProjects } from '../src/projects/manager.js';
 import { projectMetadataSchema } from '../src/projects/schema.js';
@@ -64,6 +66,28 @@ describe('project management', () => {
     expect(() => initializeProject(dataRoot, 'existing')).toThrow(InputError);
     expect(readFileSync(userFile, 'utf8')).toBe('keep this data');
     expect(listProjects(dataRoot)[0]?.id).toBe(original.id);
+  });
+
+  it('removes the new project directory after metadata writing fails', () => {
+    const dataRoot = createTemporaryDirectory('qlm-project-write-failure-');
+    const projectDirectory = join(dataRoot, 'projects', 'retryable');
+    const originalWriteFileSync = fs.writeFileSync;
+    fs.writeFileSync = ((fileDescriptor: number, contents: string) => {
+      originalWriteFileSync(fileDescriptor, contents, 'utf8');
+      throw new Error('simulated metadata write failure');
+    }) as typeof fs.writeFileSync;
+    syncBuiltinESMExports();
+
+    try {
+      expect(() => initializeProject(dataRoot, 'retryable')).toThrow(
+        InternalError,
+      );
+      expect(existsSync(projectDirectory)).toBe(false);
+      expect(listProjects(dataRoot)).toEqual([]);
+    } finally {
+      fs.writeFileSync = originalWriteFileSync;
+      syncBuiltinESMExports();
+    }
   });
 
   it('lists valid projects in stable order and ignores directories without metadata', () => {
