@@ -18,6 +18,7 @@ export interface HierarchyPlannerOptions {
   model: string;
   temperature?: number;
   maxTokens?: number;
+  signal?: AbortSignal;
 }
 
 export interface HierarchyPlannerResponse {
@@ -90,6 +91,7 @@ export async function planKnowledgeHierarchy(
     prompt,
     temperature: options.temperature ?? 0,
     ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
     schemaName: 'qlm_knowledge_hierarchy',
     schema: HIERARCHY_PLANNER_SCHEMA,
   });

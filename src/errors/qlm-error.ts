@@ -3,6 +3,7 @@ export const QLM_ERROR_CODES = {
   input: 'QLM_INPUT_ERROR',
   internal: 'QLM_INTERNAL_ERROR',
   provider: 'QLM_PROVIDER_ERROR',
+  cancelled: 'QLM_CANCELLED',
 } as const;
 
 export type QLMErrorCode =
