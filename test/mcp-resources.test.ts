@@ -140,10 +140,19 @@ describe('MCP knowledge resources', () => {
     const outside = join(outsideRoot, 'secret.md');
     writeFileSync(outside, 'private outside content');
     let symlinkCreated = true;
+    let directoryJunctionCreated = true;
     try {
       symlinkSync(outside, join(knowledgeRoot, 'security', 'escape.md'), 'file');
     } catch {
       symlinkCreated = false;
+    }
+    try {
+      symlinkSync(outsideRoot, join(knowledgeRoot, 'linked-outside'), 'junction');
+    } catch {
+      directoryJunctionCreated = false;
+    }
+    if (process.platform === 'win32') {
+      expect(directoryJunctionCreated).toBe(true);
     }
 
     await withClient(dataRoot, async (client) => {
@@ -158,12 +167,28 @@ describe('MCP knowledge resources', () => {
       );
       expect(JSON.stringify(normalizedTraversal)).not.toContain(dataRoot);
       expect(JSON.stringify(normalizedTraversal)).not.toContain('private outside content');
+      const outsideTraversal = await client.readResource({
+        uri: `qlm://demo/../${encodeURIComponent(outside)}`,
+      }).catch((error: unknown) => error);
+      expect(String(outsideTraversal)).toContain('Requested project knowledge resource is unavailable.');
+      expect(String(outsideTraversal)).not.toContain(dataRoot);
+      expect(String(outsideTraversal)).not.toContain('private outside content');
       if (symlinkCreated) {
         const symlink = await client.readResource({
           uri: 'qlm://demo/security/escape.md',
         }).catch((error: unknown) => error);
         expect(String(symlink)).toContain('Requested project knowledge resource is unavailable.');
         expect(String(symlink)).not.toContain(dataRoot);
+      }
+      if (directoryJunctionCreated) {
+        const resources = await client.listResources();
+        expect(resources.resources.some((resource) => resource.uri.includes('linked-outside'))).toBe(false);
+        const junction = await client.readResource({
+          uri: 'qlm://demo/linked-outside/secret.md',
+        }).catch((error: unknown) => error);
+        expect(String(junction)).toContain('Requested project knowledge resource is unavailable.');
+        expect(String(junction)).not.toContain(dataRoot);
+        expect(String(junction)).not.toContain('private outside content');
       }
     });
   });
