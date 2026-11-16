@@ -192,13 +192,23 @@ function findCandidateRows(
     mode: 'hierarchical',
     rows: findHierarchyMatches(database, projectId, query, maxDepth, maxResults),
   });
-  if (!isDocumentPath && query !== '.' && query !== '/') {
+  if (query !== '.' && query !== '/') {
+    const fullTextQuery = isDocumentPath ? createPathTextQuery(query) : query;
+    if (fullTextQuery.length === 0) {
+      return sources;
+    }
     sources.push({
       mode: 'fulltext',
-      rows: findFullTextMatches(database, projectId, query, maxResults),
+      rows: findFullTextMatches(database, projectId, fullTextQuery, maxResults),
     });
   }
   return sources;
+}
+
+function createPathTextQuery(path: string): string {
+  const withoutExtension = path.replace(/\.(?:md|markdown)$/i, '').replace(/[\\/_.-]+/g, ' ');
+  const terms = withoutExtension.match(/[\p{L}\p{N}]+/gu) ?? [];
+  return terms.map((term) => `"${term}"`).join(' OR ');
 }
 
 function isSynchronizingMode(mode: RetrievalMode): boolean {
