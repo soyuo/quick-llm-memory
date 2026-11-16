@@ -2,6 +2,7 @@ export const QLM_ERROR_CODES = {
   configuration: 'QLM_CONFIG_ERROR',
   input: 'QLM_INPUT_ERROR',
   internal: 'QLM_INTERNAL_ERROR',
+  provider: 'QLM_PROVIDER_ERROR',
 } as const;
 
 export type QLMErrorCode =
