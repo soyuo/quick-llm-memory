@@ -9,6 +9,13 @@ export const settingsSchema = z
           .default('info'),
       })
       .default({ level: 'info' }),
+    ai: z
+      .object({
+        provider: z.enum(['openai', 'openai-compatible']).default('openai'),
+        model: z.string().trim().min(1).optional(),
+      })
+      .passthrough()
+      .optional(),
   })
   .passthrough();
 
