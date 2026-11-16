@@ -12,6 +12,7 @@ import {
   type ApplicationLogger,
 } from '../logging/logger.js';
 import { validateInternalLinks } from '../markdown/link-validator.js';
+import { searchMarkdownDocuments } from '../markdown/search.js';
 import {
   buildKnowledgeTree,
   type CategoryTreeNode,
@@ -165,6 +166,39 @@ export function registerProjectCommands(
               : 'No knowledge documents or categories found.\n'
             : `${entries.join('\n')}\n`,
         );
+      });
+    });
+
+  cli
+    .command('search <query>')
+    .description('Search project Markdown documents')
+    .requiredOption('--project <name>', 'Project to search')
+    .action(async (query: string, { project }: { project: string }) => {
+      await withProjectRuntime(runtimeFactory, async ({ dataRoot }) => {
+        const projectName = validateProjectName(project);
+        const exists = listProjects(dataRoot).some(({ name }) => name === projectName);
+        if (!exists) {
+          throw new InputError(`Project not found: ${projectName}`, {
+            suggestedAction: 'Run qlm project list to see initialized projects.',
+          });
+        }
+
+        const knowledgeRoot = join(
+          dataRoot,
+          'projects',
+          projectName,
+          'knowledge',
+        );
+        const results = searchMarkdownDocuments(knowledgeRoot, query);
+        writeOut(`Search results for ${JSON.stringify(query)}:\n`);
+        if (results.length === 0) {
+          writeOut('No matching documents found.\n');
+          return;
+        }
+
+        for (const result of results) {
+          writeOut(`- ${result.path} — ${result.title}\n  ${result.excerpt}\n`);
+        }
       });
     });
 }
