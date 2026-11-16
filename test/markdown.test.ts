@@ -87,6 +87,20 @@ describe('parseMarkdownDocument', () => {
     expect(parsed.body).toBe('\n\n# Security\n');
   });
 
+  it('accepts depth zero for the knowledge root index', () => {
+    const parsed = parseMarkdownDocument(
+      '---\nid: knowledge\ntitle: Knowledge\ntype: category-index\ndepth: 0\n---\n\n# Knowledge\n',
+      'knowledge/index.md',
+    );
+
+    expect(parsed.metadata).toMatchObject({
+      id: 'knowledge',
+      title: 'Knowledge',
+      type: 'category-index',
+      depth: 0,
+    });
+  });
+
   it('reads Markdown from disk and reports the source path', () => {
     const directory = mkdtempSync(join(tmpdir(), 'qlm-markdown-'));
     temporaryDirectories.push(directory);
