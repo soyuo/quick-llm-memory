@@ -173,7 +173,7 @@ function parseTreeDepth(value: string | undefined): number {
   }
 
   const depth = Number(value);
-  if (!Number.isInteger(depth) || depth < 0) {
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(depth) || depth < 0) {
     throw new InputError('Tree depth must be a non-negative integer.', {
       suggestedAction: 'Use --depth with a whole number of 0 or greater.',
     });
