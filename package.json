@@ -20,5 +20,8 @@
   },
   "bin": {
     "qlm": "./dist/index.js"
+  },
+  "dependencies": {
+    "commander": "^15.1.0"
   }
 }
