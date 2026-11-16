@@ -6,6 +6,10 @@ The Dashboard shows the project count, the selected project's category and docum
 
 The shell lists Dashboard, Projects, Build, Explorer, Search, MCP Manager, Settings, and Logs. Screens that are not implemented yet show an unavailable message.
 
+## Native build requirements
+
+Installing from source builds the small native helper used to publish project transfers atomically without replacing an existing destination. `npm install` or `npm ci` therefore needs the platform's C/C++ build tools and Python as required by [node-gyp](https://github.com/nodejs/node-gyp#installation). On Windows, install Python and Visual Studio's C++ build tools; on macOS, install Xcode Command Line Tools; on Linux, install Python, `make`, and a C/C++ compiler. Transfer publication fails closed on unsupported filesystems instead of using a non-atomic fallback.
+
 | Key | Action |
 | --- | --- |
 | Up / Down | Select a screen |
