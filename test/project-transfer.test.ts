@@ -5,9 +5,11 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  unlinkSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -17,6 +19,9 @@ import { initializeProject, listProjects, setProjectArchived } from '../src/proj
 import { exportProject, importProject } from '../src/projects/transfer.js';
 
 const temporaryRoots: string[] = [];
+const { renameNoReplace } = createRequire(import.meta.url)('../build/Release/qlm_rename_noreplace.node') as {
+  renameNoReplace(source: string, destination: string): void;
+};
 
 afterEach(() => {
   for (const root of temporaryRoots.splice(0)) {
@@ -25,6 +30,20 @@ afterEach(() => {
 });
 
 describe('project directory transfer', () => {
+  it('does not replace an empty directory created at the publish destination', () => {
+    const parent = createDirectory('qlm-transfer-publish-');
+    const staged = join(parent, 'staged');
+    const destination = join(parent, 'destination');
+    mkdirSync(staged);
+    mkdirSync(destination);
+
+    expect(() => renameNoReplace(staged, destination)).toThrow(
+      expect.objectContaining({ code: 'EEXIST' }),
+    );
+    expect(existsSync(staged)).toBe(true);
+    expect(readdirSync(destination)).toEqual([]);
+  });
+
   it('exports and imports a complete directory without modifying its source', async () => {
     const dataRoot = createDirectory('qlm-transfer-data-');
     const exportParent = createDirectory('qlm-transfer-export-');
@@ -143,6 +162,46 @@ describe('project directory transfer', () => {
     await expect(importProject(dataRoot, sourcePath, 'linked-project'))
       .rejects.toBeInstanceOf(InputError);
     expect(existsSync(join(dataRoot, 'projects', 'linked-project'))).toBe(false);
+  });
+
+  it('rejects a file replaced by a symlink after transfer validation', async () => {
+    const dataRoot = createDirectory('qlm-transfer-race-data-');
+    const sourceRoot = createDirectory('qlm-transfer-race-source-');
+    const exportRoot = createDirectory('qlm-transfer-race-export-');
+    initializeProject(dataRoot, 'source-project');
+    const sourceProject = join(dataRoot, 'projects', 'source-project');
+    const sourceFile = join(sourceProject, 'knowledge', 'note.md');
+    const outsideFile = join(sourceRoot, 'outside.md');
+    mkdirSync(join(sourceProject, 'knowledge'), { recursive: true });
+    writeFileSync(sourceFile, 'inside');
+    writeFileSync(outsideFile, 'outside secret');
+    const symlinkProbe = join(sourceRoot, 'probe-link');
+    try {
+      symlinkSync(outsideFile, symlinkProbe, 'file');
+      unlinkSync(symlinkProbe);
+    } catch {
+      return;
+    }
+    let replaced = false;
+
+    await expect(exportProject(
+      dataRoot,
+      'source-project',
+      join(exportRoot, 'exported'),
+      {
+        onProgress: (progress) => {
+          if (progress.phase === 'copying' && !replaced) {
+            replaced = true;
+            unlinkSync(sourceFile);
+            symlinkSync(outsideFile, sourceFile, 'file');
+          }
+        },
+      },
+    )).rejects.toBeInstanceOf(InputError);
+
+    expect(existsSync(join(exportRoot, 'exported'))).toBe(false);
+    expect(readdirSync(exportRoot)).toEqual([]);
+    expect(readFileSync(outsideFile, 'utf8')).toBe('outside secret');
   });
 });
 

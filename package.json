@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:retrieval-quality": "vitest run test/retrieval-quality.test.ts",
-    "verify:mcp": "npm run build && node scripts/verify-mcp.mjs"
+    "verify:mcp": "npm run build && node scripts/verify-mcp.mjs",
+    "install": "node-gyp rebuild"
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "^2.4.0",
@@ -32,6 +33,7 @@
     "better-sqlite3": "^13.2.0",
     "commander": "^15.1.0",
     "ink": "^8.0.0",
+    "node-gyp": "^12.4.0",
     "pino": "^10.4.0",
     "react": "^19.3.1",
     "remark-frontmatter": "^5.0.0",

@@ -1,19 +1,22 @@
 import { randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
-import { constants } from 'node:fs';
+import { constants, existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import {
-  copyFile,
+  chmod,
   lstat,
   mkdir,
   mkdtemp,
+  open,
   readFile,
   readdir,
   realpath,
-  rename,
   rm,
+  unlink,
   writeFile,
 } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { InputError, InternalError, QLMError } from '../errors/qlm-error.js';
 import { listProjects } from './manager.js';
@@ -21,6 +24,11 @@ import { projectMetadataSchema, validateProjectName, type ProjectMetadata } from
 
 const PROJECTS_DIRECTORY = 'projects';
 const PROJECT_METADATA_FILE = 'project.yaml';
+const packageRoot = findPackageRoot(dirname(fileURLToPath(import.meta.url)));
+const require = createRequire(join(packageRoot, 'package.json'));
+const { renameNoReplace } = require('./build/Release/qlm_rename_noreplace.node') as {
+  renameNoReplace(source: string, destination: string): void;
+};
 
 export type ProjectTransferOperation = 'import' | 'export';
 export type ProjectTransferPhase = 'validating' | 'copying' | 'committing';
@@ -52,7 +60,7 @@ export async function importProject(
   const projectName = validateProjectName(name);
   const sourceDirectory = resolve(sourcePath);
   const projectsDirectory = join(dataRoot, PROJECTS_DIRECTORY);
-  const stageParent = resolve(dataRoot);
+  let stageParent: string;
   let targetDirectory: string;
   let stageDirectory: string | undefined;
   report(options, 'import', 'validating', 0, 0);
@@ -60,7 +68,8 @@ export async function importProject(
   try {
     const sourceMetadata = await readBundleMetadata(sourceDirectory);
     await ensureRealDirectory(projectsDirectory, true);
-    targetDirectory = join(await realpath(projectsDirectory), projectName);
+    stageParent = await realpath(projectsDirectory);
+    targetDirectory = join(stageParent, projectName);
     if (await pathExists(targetDirectory)) {
       throw new InputError('A project with that name already exists.', {
         suggestedAction: 'Choose another project name or remove the existing project first.',
@@ -99,12 +108,17 @@ export async function importProject(
         suggestedAction: 'Choose another project name or remove the existing project first.',
       });
     }
-    await rename(projectRoot, targetDirectory);
+    renameNoReplace(projectRoot, targetDirectory);
     stageDirectory = undefined;
     return importedMetadata;
   } catch (error) {
     if (stageDirectory !== undefined) {
       await rm(stageDirectory, { recursive: true, force: true }).catch(() => undefined);
+    }
+    if (hasErrorCode(error, 'EEXIST')) {
+      throw new InputError('A project with that name already exists.', {
+        suggestedAction: 'Choose another project name or remove the existing project first.',
+      });
     }
     if (error instanceof QLMError) {
       throw error;
@@ -176,12 +190,17 @@ export async function exportProject(
         suggestedAction: 'Choose a new directory path; exports never overwrite existing files.',
       });
     }
-    await rename(stageDirectory, destination);
+    renameNoReplace(stageDirectory, destination);
     stageDirectory = undefined;
     return destination;
   } catch (error) {
     if (stageDirectory !== undefined) {
       await rm(stageDirectory, { recursive: true, force: true }).catch(() => undefined);
+    }
+    if (hasErrorCode(error, 'EEXIST')) {
+      throw new InputError('The export destination already exists.', {
+        suggestedAction: 'Choose a new directory path; exports never overwrite existing files.',
+      });
     }
     if (error instanceof QLMError) {
       throw error;
@@ -195,7 +214,7 @@ export async function exportProject(
 
 interface ProjectTreeEntries {
   directories: string[];
-  files: string[];
+  files: Array<{ path: string; dev: number; ino: number; mode: number }>;
 }
 
 async function readBundleMetadata(sourceDirectory: string): Promise<ProjectMetadata> {
@@ -251,7 +270,12 @@ async function scanProjectTree(root: string): Promise<ProjectTreeEntries> {
         entries.directories.push(relativePath);
         await visit(sourcePath, relativePath);
       } else if (info.isFile()) {
-        entries.files.push(relativePath);
+        entries.files.push({
+          path: relativePath,
+          dev: info.dev,
+          ino: info.ino,
+          mode: info.mode,
+        });
       } else {
         throw new InputError('Project folders may contain only regular files and directories.');
       }
@@ -278,13 +302,105 @@ async function copyProjectTree(
   let completedFiles = 0;
   for (const file of entries.files) {
     checkCancelled(options.signal);
-    await copyFile(
-      join(sourceRoot, file),
-      join(targetRoot, file),
-      constants.COPYFILE_EXCL,
-    );
+    await copyRegularFileSafely(sourceRoot, targetRoot, file, options.signal);
     completedFiles += 1;
     report(options, operation, 'copying', completedFiles, entries.files.length);
+  }
+}
+
+async function copyRegularFileSafely(
+  sourceRoot: string,
+  targetRoot: string,
+  expected: ProjectTreeEntries['files'][number],
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  const sourcePath = join(sourceRoot, expected.path);
+  const targetPath = join(targetRoot, expected.path);
+  const rootInfo = await lstat(sourceRoot);
+  if (rootInfo.isSymbolicLink() || !rootInfo.isDirectory()) {
+    throw new InputError('The source project directory changed during transfer.');
+  }
+  const canonicalRoot = await realpath(sourceRoot);
+  const parts = expected.path.split(sep);
+  let currentPath = sourceRoot;
+  let sourceInfo;
+
+  for (let index = 0; index < parts.length; index += 1) {
+    currentPath = join(currentPath, parts[index]!);
+    const info = await lstat(currentPath);
+    const last = index === parts.length - 1;
+    if (info.isSymbolicLink() || (last ? !info.isFile() : !info.isDirectory())) {
+      throw new InputError('A project entry changed or became unsafe during transfer.');
+    }
+    const canonicalPath = await realpath(currentPath);
+    if (!isWithin(canonicalRoot, canonicalPath)) {
+      throw new InputError('A project entry changed or escaped the validated source directory.');
+    }
+    if (last) {
+      sourceInfo = info;
+    }
+  }
+
+  if (
+    sourceInfo === undefined ||
+    sourceInfo.dev !== expected.dev ||
+    sourceInfo.ino !== expected.ino
+  ) {
+    throw new InputError('A project file changed after transfer validation.');
+  }
+
+  let sourceHandle;
+  let targetHandle;
+  try {
+    sourceHandle = await open(
+      sourcePath,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+    );
+    const openedInfo = await sourceHandle.stat();
+    if (
+      !openedInfo.isFile() ||
+      openedInfo.dev !== expected.dev ||
+      openedInfo.ino !== expected.ino
+    ) {
+      throw new InputError('A project file changed while it was being transferred.');
+    }
+    targetHandle = await open(targetPath, 'wx', expected.mode & 0o777);
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let position = 0;
+    while (true) {
+      checkCancelled(signal);
+      const { bytesRead } = await sourceHandle.read(
+        buffer,
+        0,
+        buffer.length,
+        position,
+      );
+      if (bytesRead === 0) {
+        break;
+      }
+      let written = 0;
+      while (written < bytesRead) {
+        const result = await targetHandle.write(
+          buffer,
+          written,
+          bytesRead - written,
+          position + written,
+        );
+        written += result.bytesWritten;
+      }
+      position += bytesRead;
+    }
+    await targetHandle.sync();
+    await chmod(targetPath, expected.mode & 0o777);
+  } catch (error) {
+    await unlink(targetPath).catch(() => undefined);
+    if (error instanceof QLMError) {
+      throw error;
+    }
+    throw new InputError('A project file could not be copied safely.');
+  } finally {
+    await sourceHandle?.close().catch(() => undefined);
+    await targetHandle?.close().catch(() => undefined);
   }
 }
 
@@ -379,6 +495,24 @@ function isWithin(root: string, candidate: string): boolean {
     !pathFromRoot.startsWith(`..${sep}`) &&
     !isAbsolute(pathFromRoot)
   );
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+  return error instanceof Error && 'code' in error && error.code === code;
+}
+
+function findPackageRoot(startDirectory: string): string {
+  let currentDirectory = startDirectory;
+  while (true) {
+    if (existsSync(join(currentDirectory, 'package.json'))) {
+      return currentDirectory;
+    }
+    const parentDirectory = dirname(currentDirectory);
+    if (parentDirectory === currentDirectory) {
+      throw new Error('Could not locate the quick-llm-memory package root.');
+    }
+    currentDirectory = parentDirectory;
+  }
 }
 
 function checkCancelled(signal: AbortSignal | undefined): void {
