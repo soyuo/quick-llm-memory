@@ -11,7 +11,11 @@ const temporaryRoot = mkdtempSync(join(tmpdir(), 'qlm-mcp-verification-'));
 const dataRoot = join(temporaryRoot, 'data');
 const outsideFile = join(temporaryRoot, 'outside.md');
 const cliPath = join(repositoryRoot, 'dist', 'index.js');
-const environment = { ...process.env, QLM_HOME: dataRoot };
+const environment = Object.fromEntries(
+  Object.entries(process.env).filter(([key]) =>
+    /^(PATH|SYSTEMROOT|WINDIR|TEMP|TMP|COMSPEC|PATHEXT)$/i.test(key)),
+);
+environment.QLM_HOME = dataRoot;
 const runCli = (...args) => execFileSync(process.execPath, [cliPath, ...args], {
   cwd: repositoryRoot,
   env: environment,
@@ -78,15 +82,18 @@ try {
 
   const projectList = await client.callTool({ name: 'memory_list_projects', arguments: {} });
   assert.equal(projectList.isError, undefined);
+  assert.deepEqual(projectList.structuredContent?.projects?.map(({ name }) => name), ['demo']);
   const tree = await client.callTool({
     name: 'memory_get_tree', arguments: { project: 'demo', maxDepth: 2 },
   });
   assert.equal(tree.isError, undefined);
+  assert.match(JSON.stringify(tree.structuredContent), /security\/overview\.md/);
   const search = await client.callTool({
     name: 'memory_search',
     arguments: { project: 'demo', query: 'verification', mode: 'fulltext' },
   });
   assert.equal(search.isError, undefined);
+  assert.match(JSON.stringify(search.structuredContent), /security\/overview\.md/);
   const document = await client.callTool({
     name: 'memory_read', arguments: { project: 'demo', path: 'security/overview.md' },
   });
@@ -107,7 +114,7 @@ try {
   assert.ok(prompt.messages.length > 0);
 
   const traversal = await client.callTool({
-    name: 'memory_read', arguments: { project: 'demo', path: '../outside.md' },
+    name: 'memory_read', arguments: { project: 'demo', path: '../../../../outside.md' },
   });
   assert.equal(traversal.isError, true);
   assert.doesNotMatch(JSON.stringify(traversal), /This file must never be exposed/);
