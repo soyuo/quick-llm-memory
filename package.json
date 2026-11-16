@@ -10,7 +10,8 @@
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:retrieval-quality": "vitest run test/retrieval-quality.test.ts"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
