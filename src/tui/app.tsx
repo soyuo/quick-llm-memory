@@ -80,6 +80,9 @@ export function TuiApp({ columns, rows, dataRoot, onExit }: TuiAppProps): React.
 
   useInput((input, key) => {
     if (activeScreen === 'Projects' && projectAction.kind !== 'idle') {
+      if (key.tab) {
+        return;
+      }
       if (key.escape) {
         setProjectAction({ kind: 'idle' });
         setProjectMessage('Project action cancelled.');
