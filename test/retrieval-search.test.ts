@@ -363,6 +363,32 @@ describe('path and hierarchical retrieval', () => {
     expect(output.join('')).toContain('No matching documents fit the token budget.');
   });
 
+  it('prints the selected context estimate for budgeted results', async () => {
+    const { dataRoot } = createIndexedProject();
+    const output: string[] = [];
+    const exitCode = await runCli(
+      [
+        'node', 'qlm', 'search', 'security/overview.md', '--project', 'demo',
+        '--mode', 'path', '--max-tokens', '1000',
+      ],
+      {
+        writeOut: (text) => output.push(text),
+        writeError: () => undefined,
+      },
+      {
+        runtimeFactory: () => ({
+          dataRoot,
+          logger: createApplicationLogger({ dataRoot, level: 'fatal' }),
+        }),
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(output.join('')).toContain('Estimated token budget: ');
+    expect(output.join('')).toContain('estimated context tokens: ');
+    expect(output.join('')).not.toContain('estimated tokens: ');
+  });
+
   it('rejects malformed token budgets before retrieval', async () => {
     const { dataRoot } = createIndexedProject();
     const errorOutput: string[] = [];
