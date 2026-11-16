@@ -120,6 +120,14 @@ describe('MCP read-only project tools', () => {
       expect(zero.structuredContent).toMatchObject({
         context: '', documents: [], consumedTokens: 0,
       });
+      const ignoredDepth = await client.callTool({
+        name: 'memory_get_context',
+        arguments: {
+          project: 'demo', query: 'authentication', mode: 'fulltext', max_depth: 2,
+        },
+      });
+      expect(ignoredDepth.isError).toBe(true);
+      expect(JSON.stringify(ignoredDepth)).not.toContain(dataRoot);
     });
     expect(readFileSync(databasePath)).toEqual(beforeDatabase);
     expect(readFileSync(join(knowledgeRoot, 'security/overview.md'))).toEqual(beforeMarkdown);
