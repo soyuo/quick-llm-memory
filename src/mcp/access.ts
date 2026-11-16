@@ -3,12 +3,12 @@ import { join, resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { InputError } from '../errors/qlm-error.js';
 import { readStoredMarkdownDocument } from '../markdown/repository.js';
+import type { DocumentFrontmatter } from '../markdown/schema.js';
 import {
   projectMetadataSchema,
   validateProjectName,
   type ProjectMetadata,
 } from '../projects/schema.js';
-import type { DocumentFrontmatter } from '../markdown/schema.js';
 
 const PROJECTS_DIRECTORY = 'projects';
 const PROJECT_METADATA_FILE = 'project.yaml';
@@ -79,11 +79,31 @@ export function resolveMcpProjectScope(
     throw new InputError('Selected MCP project is unavailable.', { cause });
   }
 
+  const knowledgeRoot = join(projectRoot, KNOWLEDGE_DIRECTORY);
+  try {
+    const knowledgeInfo = lstatSync(knowledgeRoot);
+    if (knowledgeInfo.isSymbolicLink() || !knowledgeInfo.isDirectory()) {
+      throw new Error('MCP knowledge root is not a regular directory.');
+    }
+  } catch (cause) {
+    if (!isMissingPathError(cause)) {
+      throw new InputError('Selected MCP project is unavailable.', { cause });
+    }
+  }
+
   return {
     project,
     projectRoot,
-    knowledgeRoot: join(projectRoot, KNOWLEDGE_DIRECTORY),
+    knowledgeRoot,
   };
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (
+    error instanceof Error
+    && 'code' in error
+    && (error as NodeJS.ErrnoException).code === 'ENOENT'
+  );
 }
 
 export function readMcpProjectDocument(

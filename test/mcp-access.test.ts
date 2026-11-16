@@ -1,8 +1,18 @@
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  mkdirSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { resolveProjectDatabasePath, openProjectDatabase } from '../src/database/database.js';
+import {
+  openProjectDatabase,
+  resolveProjectDatabasePath,
+} from '../src/database/database.js';
 import { InputError } from '../src/errors/qlm-error.js';
 import {
   assertMcpOperationAllowed,
@@ -111,6 +121,28 @@ describe('MCP read-only project access', () => {
     }
     expect(() => resolveMcpProjectScope(fixture.dataRoot, 'alias')).toThrow(InputError);
     expect(readFileSync(join(outside, 'secret.md'), 'utf8')).toBe('outside content');
+  });
+
+  it('rejects a knowledge root that points outside the selected project', (context) => {
+    const fixture = createProjectFixture();
+    const outside = mkdtempSync(join(tmpdir(), 'qlm-mcp-root-outside-'));
+    temporaryRoots.push(outside);
+    mkdirSync(join(outside, 'notes'));
+    writeFileSync(
+      join(outside, 'notes', 'readme.md'),
+      'outside content',
+    );
+    rmSync(fixture.knowledgeRoot, { recursive: true, force: true });
+    try {
+      symlinkSync(outside, fixture.knowledgeRoot, 'junction');
+    } catch {
+      context.skip();
+      return;
+    }
+
+    expect(() => resolveMcpProjectScope(fixture.dataRoot, 'demo')).toThrow(InputError);
+    expect(readFileSync(join(outside, 'notes', 'readme.md'), 'utf8'))
+      .toBe('outside content');
   });
 
   it('denies writes and unknown operations before project data changes', () => {
