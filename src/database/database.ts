@@ -4,7 +4,10 @@ import { basename, join, resolve } from 'node:path';
 import { ConfigurationError } from '../config/error.js';
 import { InputError, InternalError, QLMError } from '../errors/qlm-error.js';
 import type { ProjectMetadata } from '../projects/schema.js';
-import { initializeProjectDatabaseSchema } from './schema.js';
+import {
+  initializeProjectDatabaseSchema,
+  PROJECT_DATABASE_SCHEMA_VERSION,
+} from './schema.js';
 
 const INDEX_DIRECTORY = 'index';
 const DATABASE_FILE = 'knowledge.db';
@@ -59,6 +62,82 @@ export function openProjectDatabase(
       filePath: databasePath,
       cause,
       suggestedAction: 'Check that the project database is accessible and not corrupted.',
+    });
+  }
+}
+
+export function openProjectDatabaseReadOnly(
+  projectRoot: string,
+  project: ProjectMetadata,
+): Database.Database {
+  const canonicalProjectRoot = resolveExistingProjectRoot(projectRoot);
+  if (basename(canonicalProjectRoot) !== project.name) {
+    throw new InputError('The project directory name does not match its metadata.', {
+      suggestedAction: 'Open the database from the initialized project directory.',
+    });
+  }
+
+  const indexPath = join(canonicalProjectRoot, INDEX_DIRECTORY);
+  const databasePath = join(indexPath, DATABASE_FILE);
+  try {
+    const indexInfo = lstatSync(indexPath);
+    if (indexInfo.isSymbolicLink() || !indexInfo.isDirectory()) {
+      throw new InputError(`The project index path is not a regular directory: ${indexPath}`, {
+        suggestedAction: 'Remove the invalid index path and run qlm reindex.',
+      });
+    }
+    const databaseInfo = lstatSync(databasePath);
+    if (databaseInfo.isSymbolicLink() || !databaseInfo.isFile()) {
+      throw new InputError(`The project database path is not a regular file: ${databasePath}`, {
+        suggestedAction: 'Remove the invalid database path and run qlm reindex.',
+      });
+    }
+  } catch (cause) {
+    if (cause instanceof QLMError) {
+      throw cause;
+    }
+    throw new ConfigurationError('The project index is unavailable for read-only retrieval.', {
+      filePath: databasePath,
+      cause,
+      suggestedAction: 'Run qlm reindex to create or repair the project index.',
+    });
+  }
+
+  let database: Database.Database | undefined;
+  try {
+    database = new Database(databasePath, { readonly: true, fileMustExist: true });
+    const version = database.pragma('user_version', { simple: true });
+    if (version !== PROJECT_DATABASE_SCHEMA_VERSION) {
+      throw new ConfigurationError(
+        `The project index schema version ${String(version)} is not supported for retrieval.`,
+        {
+          filePath: databasePath,
+          suggestedAction: 'Run qlm reindex to upgrade the project index.',
+        },
+      );
+    }
+
+    const projectRow = database
+      .prepare('SELECT id FROM projects WHERE id = ?')
+      .get(project.id);
+    if (projectRow === undefined) {
+      throw new ConfigurationError('The project is not present in its search index.', {
+        filePath: databasePath,
+        suggestedAction: 'Run qlm reindex to rebuild the project index.',
+      });
+    }
+    return database;
+  } catch (cause) {
+    if (database?.open) {
+      database.close();
+    }
+    if (cause instanceof QLMError) {
+      throw cause;
+    }
+    throw new ConfigurationError('Unable to open the project index for read-only retrieval.', {
+      filePath: databasePath,
+      cause,
+      suggestedAction: 'Check that the project index is accessible, then run qlm reindex if needed.',
     });
   }
 }
