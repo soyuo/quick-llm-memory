@@ -104,7 +104,7 @@ function extractSections(source: SourceDocument, tree: MarkdownNode): SourceSect
     sections.push(makeSection(source, 'Introduction', [], 0, firstHeadingStart));
   }
 
-  const headingPath: string[] = [];
+  const headingStack: Array<{ depth: number; title: string }> = [];
   for (let index = 0; index < headings.length; index += 1) {
     const heading = headings[index];
     if (heading === undefined || heading.start === undefined) {
@@ -112,13 +112,25 @@ function extractSections(source: SourceDocument, tree: MarkdownNode): SourceSect
     }
     const title =
       markdownText(heading.node).replace(/\s+/g, ' ').trim() || 'Untitled section';
-    headingPath.length = heading.depth - 1;
-    headingPath[heading.depth - 1] = title;
+    while (headingStack.length > 0) {
+      const parent = headingStack.at(-1);
+      if (parent === undefined || parent.depth < heading.depth) {
+        break;
+      }
+      headingStack.pop();
+    }
+    headingStack.push({ depth: heading.depth, title });
 
     const nextBoundary = headings[index + 1]?.start;
     const end = nextBoundary ?? source.content.length;
     sections.push(
-      makeSection(source, title, [...headingPath], heading.start, end),
+      makeSection(
+        source,
+        title,
+        headingStack.map((entry) => entry.title),
+        heading.start,
+        end,
+      ),
     );
   }
 
