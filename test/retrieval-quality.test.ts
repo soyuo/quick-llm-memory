@@ -131,6 +131,22 @@ describe('Phase 4 retrieval quality fixture', () => {
     expect(new Set(readTracker.paths).size).toBe(1);
     expect(readTracker.paths.length).toBeLessThan(fixture.markdownFileCount);
   });
+
+  it('selects and omits documents under a constrained context budget', () => {
+    const fixture = createFixture();
+    const context = buildRetrievalContext({
+      projectRoot: fixture.projectRoot,
+      project: fixture.project,
+      projectId: fixture.project.id,
+      query: 'security',
+      mode: 'hierarchical',
+      maxTokens: 150,
+    });
+
+    expect(context.documents.map(({ path }) => path)).toEqual(['security/access.md']);
+    expect(context.omittedResults).toBe(1);
+    expect(context.consumedTokens).toBeLessThanOrEqual(context.maxTokens);
+  });
 });
 
 function createFixture(extraDocuments = 0) {
