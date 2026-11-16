@@ -1,10 +1,13 @@
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
+import { ConfigurationError } from '../config/error.js';
 import { InputError } from '../errors/qlm-error.js';
-import { readStoredMarkdownDocument } from '../markdown/repository.js';
+import { readStoredMarkdownSource } from '../markdown/repository.js';
 import { openProjectDatabaseReadOnly } from '../database/database.js';
+import { rebuildProjectIndex } from '../database/reindex.js';
 import type { ProjectMetadata } from '../projects/schema.js';
 
-export type RetrievalMode = 'path' | 'hierarchical';
+export type RetrievalMode = 'path' | 'hierarchical' | 'fulltext';
 
 export interface SearchRequest {
   projectId: string;
@@ -33,14 +36,28 @@ export interface SearchResult {
 export type RetrievalSearchResult = SearchResult;
 
 const DEFAULT_MAX_RESULTS = 10;
+const MAX_MAX_RESULTS = 100;
 const DEFAULT_MAX_DEPTH = 5;
 const MAX_SNIPPET_LENGTH = 160;
 
 export function searchProjectDocuments(
   request: RetrievalSearchRequest,
 ): RetrievalSearchResult[] {
+  if (!['path', 'hierarchical', 'fulltext'].includes(request.mode)) {
+    throw new InputError('Unsupported retrieval mode.', {
+      suggestedAction: 'Use path, hierarchical, or fulltext retrieval.',
+    });
+  }
   const maxResults = validateLimit(request.maxResults, DEFAULT_MAX_RESULTS, 'maxResults');
+  if (maxResults > MAX_MAX_RESULTS) {
+    throw new InputError(`maxResults must not exceed ${MAX_MAX_RESULTS}.`, {
+      suggestedAction: `Choose a value between 0 and ${MAX_MAX_RESULTS}.`,
+    });
+  }
   const maxDepth = validateLimit(request.maxDepth, DEFAULT_MAX_DEPTH, 'maxDepth');
+  if (request.maxDepth !== undefined && request.mode !== 'hierarchical') {
+    throw new InputError('maxDepth is only supported for hierarchical retrieval.');
+  }
   const query = request.query.trim();
   if (query.length === 0) {
     throw new InputError('Retrieval query must not be empty.');
@@ -49,21 +66,49 @@ export function searchProjectDocuments(
     throw new InputError('The retrieval project ID does not match project metadata.');
   }
 
+  return searchIndexedDocuments(request, query, maxDepth, maxResults, true);
+}
+
+function searchIndexedDocuments(
+  request: RetrievalSearchRequest,
+  query: string,
+  maxDepth: number,
+  maxResults: number,
+  canSynchronize: boolean,
+): RetrievalSearchResult[] {
   const database = openProjectDatabaseReadOnly(request.projectRoot, request.project);
+  let staleFullTextIndex = false;
+  const results: RetrievalSearchResult[] = [];
   try {
     const rows = request.mode === 'path'
       ? findPathMatch(database, request.project.id, query)
-      : findHierarchyMatches(database, request.project.id, query, maxDepth, maxResults);
+      : request.mode === 'hierarchical'
+        ? findHierarchyMatches(database, request.project.id, query, maxDepth, maxResults)
+        : findFullTextMatches(database, request.project.id, query, maxResults);
 
-    return rows.slice(0, maxResults).map((row) => {
-      const document = readStoredMarkdownDocument(joinKnowledgeRoot(request.projectRoot), row.path);
-      if (document.metadata.type !== 'document' || document.metadata.id !== row.id) {
-        throw new InputError(`The project index is out of date for ${row.path}.`, {
-          suggestedAction: 'Run qlm reindex to rebuild the project index.',
-        });
+    for (const row of rows.slice(0, maxResults)) {
+      let source: ReturnType<typeof readStoredMarkdownSource>;
+      try {
+        source = readStoredMarkdownSource(joinKnowledgeRoot(request.projectRoot), row.path);
+      } catch (cause) {
+        if (request.mode === 'fulltext' && canSynchronize && cause instanceof ConfigurationError) {
+          staleFullTextIndex = true;
+          break;
+        }
+        throw cause;
+      }
+      const document = source.document;
+      const contentHash = createHash('sha256').update(source.sourceText).digest('hex');
+      if (document.metadata.type !== 'document' || document.metadata.id !== row.id ||
+          contentHash !== row.contentHash) {
+        if (request.mode === 'fulltext' && canSynchronize) {
+          staleFullTextIndex = true;
+          break;
+        }
+        throw staleIndexError(row.path);
       }
       const content = document.body.replace(/\s+/g, ' ').trim();
-      return {
+      results.push({
         documentId: row.id,
         path: row.path,
         title: document.metadata.title,
@@ -74,16 +119,32 @@ export function searchProjectDocuments(
         sourceIds: [...(document.metadata.source_ids ?? [])],
         matchedSections: [...(document.metadata.source_sections ?? [])],
         tokenCount: Math.max(1, Math.ceil(document.body.length / 4)),
-      };
-    });
+      });
+    }
   } finally {
     database.close();
   }
+
+  if (staleFullTextIndex) {
+    if (!canSynchronize) {
+      throw staleIndexError('project');
+    }
+    rebuildProjectIndex(request.projectRoot, request.project);
+    return searchIndexedDocuments(request, query, maxDepth, maxResults, false);
+  }
+  return results;
+}
+
+function staleIndexError(path: string): InputError {
+  return new InputError(`The project search index is out of date for ${path}.`, {
+    suggestedAction: 'Run qlm reindex to synchronize the search index with Markdown.',
+  });
 }
 
 interface IndexedDocumentRow {
   id: string;
   path: string;
+  contentHash: string;
 }
 
 function findPathMatch(
@@ -93,7 +154,10 @@ function findPathMatch(
 ): IndexedDocumentRow[] {
   const path = normalizeQueryPath(query, 'document');
   const row = database
-    .prepare('SELECT id, path FROM documents WHERE project_id = ? AND path = ?')
+    .prepare(`
+      SELECT id, path, content_hash AS contentHash
+      FROM documents WHERE project_id = ? AND path = ?
+    `)
     .get(projectId, path) as IndexedDocumentRow | undefined;
   return row === undefined ? [] : [row];
 }
@@ -130,7 +194,7 @@ function findHierarchyMatches(
       JOIN subtree AS parent ON child.parent_id = parent.id
       WHERE child.project_id = ? AND child.depth <= ?
     )
-    SELECT documents.id, documents.path
+    SELECT documents.id, documents.path, documents.content_hash AS contentHash
     FROM documents
     LEFT JOIN subtree ON subtree.id = documents.category_id
     WHERE documents.project_id = ?
@@ -147,6 +211,34 @@ function findHierarchyMatches(
     categoryPath.length === 0 ? 1 : 0,
     maxResults,
   ) as IndexedDocumentRow[];
+}
+
+function findFullTextMatches(
+  database: ReturnType<typeof openProjectDatabaseReadOnly>,
+  projectId: string,
+  query: string,
+  maxResults: number,
+): IndexedDocumentRow[] {
+  try {
+    return database.prepare(`
+      SELECT documents.id, documents.path, documents.content_hash AS contentHash
+      FROM document_fts
+      JOIN documents ON documents.id = document_fts.document_id
+      WHERE document_fts MATCH ? AND documents.project_id = ?
+      ORDER BY documents.path COLLATE BINARY
+      LIMIT ?
+    `).all(query, projectId, maxResults) as IndexedDocumentRow[];
+  } catch (cause) {
+    if (
+      cause instanceof Error &&
+      /^(?:fts5:|no such column:|unterminated string$)/i.test(cause.message)
+    ) {
+      throw new InputError('The full-text query is malformed.', {
+        suggestedAction: 'Check quotes, column filters, and FTS operators in the query.',
+      });
+    }
+    throw cause;
+  }
 }
 
 function normalizeQueryPath(query: string, kind: 'document' | 'category'): string {

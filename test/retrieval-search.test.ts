@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -103,6 +103,14 @@ describe('path and hierarchical retrieval', () => {
       mode: 'hierarchical',
       maxDepth: -1,
     })).toThrow(InputError);
+    expect(() => searchProjectDocuments({
+      projectRoot,
+      project,
+      projectId: project.id,
+      query: 'security',
+      mode: 'fulltext',
+      maxResults: 101,
+    })).toThrow(/must not exceed 100/);
     expect(searchProjectDocuments({
       projectRoot,
       project,
@@ -195,6 +203,126 @@ describe('path and hierarchical retrieval', () => {
   });
 });
 
+describe('SQLite full-text retrieval', () => {
+  it('searches title, path, tags, description, and body in stable order', () => {
+    const { projectRoot, knowledgeRoot, project } = createIndexedProject();
+
+    for (const [query, expectedPaths] of [
+      ['security', ['security/overview.md', 'security/vm/create.md']],
+      ['compliance', ['security/overview.md']],
+      ['policy', ['security/overview.md']],
+      ['guidance', ['security/overview.md']],
+    ] as const) {
+      const results = searchProjectDocuments({
+        projectRoot,
+        project,
+        projectId: project.id,
+        query,
+        mode: 'fulltext',
+      });
+      expect(results.map(({ path }) => path)).toEqual(expectedPaths);
+    }
+
+    const bounded = searchProjectDocuments({
+      projectRoot,
+      project,
+      projectId: project.id,
+      query: 'security',
+      mode: 'fulltext',
+      maxResults: 1,
+    });
+    expect(bounded.map(({ path }) => path)).toEqual(['security/overview.md']);
+    expect(bounded[0]?.score).toBe(0);
+    expect(readFileSync(join(knowledgeRoot, 'security/overview.md'), 'utf8'))
+      .toContain('Security guidance.');
+  });
+
+  it('returns no matches and turns malformed FTS syntax into an input error', () => {
+    const { projectRoot, project } = createIndexedProject();
+    const search = (query: string) => searchProjectDocuments({
+      projectRoot,
+      project,
+      projectId: project.id,
+      query,
+      mode: 'fulltext',
+    });
+
+    expect(search('unmatchedtoken')).toEqual([]);
+    expect(() => search('"')).toThrow(InputError);
+    expect(() => search('   ')).toThrow(InputError);
+  });
+
+  it('synchronizes a stale full-text index and retries the query once', () => {
+    const { projectRoot, knowledgeRoot, project } = createIndexedProject();
+    const path = join(knowledgeRoot, 'security/overview.md');
+    const markdown = readFileSync(path, 'utf8');
+    writeFileSync(path, markdown.replace('title: Security Overview', 'title: Updated Security Overview'), 'utf8');
+
+    const results = searchProjectDocuments({
+      projectRoot,
+      project,
+      projectId: project.id,
+      query: 'security',
+      mode: 'fulltext',
+    });
+    expect(results[0]).toMatchObject({
+      path: 'security/overview.md',
+      title: 'Updated Security Overview',
+    });
+    expect(searchProjectDocuments({
+      projectRoot,
+      project,
+      projectId: project.id,
+      query: 'updated',
+      mode: 'fulltext',
+    }).map(({ path }) => path)).toEqual(['security/overview.md']);
+  });
+
+  it('exposes full-text mode through qlm search', async () => {
+    const { dataRoot } = createIndexedProject();
+    const output: string[] = [];
+    const errorOutput: string[] = [];
+    const exitCode = await runCli(
+      ['node', 'qlm', 'search', 'compliance', '--project', 'demo', '--mode', 'fulltext'],
+      {
+        writeOut: (text) => output.push(text),
+        writeError: (text) => errorOutput.push(text),
+      },
+      {
+        runtimeFactory: () => ({
+          dataRoot,
+          logger: createApplicationLogger({ dataRoot, level: 'fatal' }),
+        }),
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(errorOutput.join('')).toBe('');
+    expect(output.join('')).toContain('security/overview.md');
+  });
+
+  it('reports malformed full-text syntax as a nonzero CLI error', async () => {
+    const { dataRoot } = createIndexedProject();
+    const errorOutput: string[] = [];
+    const exitCode = await runCli(
+      ['node', 'qlm', 'search', '"', '--project', 'demo', '--mode', 'fulltext'],
+      {
+        writeOut: () => undefined,
+        writeError: (text) => errorOutput.push(text),
+      },
+      {
+        runtimeFactory: () => ({
+          dataRoot,
+          logger: createApplicationLogger({ dataRoot, level: 'fatal' }),
+        }),
+      },
+    );
+
+    expect(exitCode).toBe(1);
+    expect(errorOutput.join('')).toContain('full-text query is malformed');
+  });
+});
+
 function createIndexedProject(index = true) {
   const dataRoot = mkdtempSync(join(tmpdir(), 'qlm-retrieval-'));
   temporaryDirectories.push(dataRoot);
@@ -220,6 +348,8 @@ function createIndexedProject(index = true) {
       status: 'draft',
       source_ids: ['source-2'],
       source_sections: ['source-2:section-1'],
+      tags: ['compliance'],
+      description: 'Policy overview',
     },
     body: '\nSecurity guidance.\n',
   });

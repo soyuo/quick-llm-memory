@@ -256,7 +256,7 @@ export function registerProjectCommands(
     .command('search <query>')
     .description('Search project Markdown documents')
     .requiredOption('--project <name>', 'Project to search')
-    .option('--mode <mode>', 'Retrieval mode: path or hierarchical')
+    .option('--mode <mode>', 'Retrieval mode: path, hierarchical, or fulltext')
     .option('--max-depth <depth>', 'Maximum hierarchy depth')
     .option('--max-results <count>', 'Maximum number of results')
     .action(async (
@@ -281,6 +281,11 @@ export function registerProjectCommands(
 
         if (options.mode !== undefined) {
           const mode = parseRetrievalMode(options.mode);
+          if (options.maxDepth !== undefined && mode !== 'hierarchical') {
+            throw new InputError('--max-depth is only supported with hierarchical mode.', {
+              suggestedAction: 'Use --mode hierarchical with --max-depth.',
+            });
+          }
           const results = searchProjectDocuments({
             projectRoot: join(dataRoot, 'projects', projectName),
             project: projectMetadata,
@@ -334,11 +339,11 @@ export function registerProjectCommands(
 }
 
 function parseRetrievalMode(value: string): RetrievalMode {
-  if (value === 'path' || value === 'hierarchical') {
+  if (value === 'path' || value === 'hierarchical' || value === 'fulltext') {
     return value;
   }
   throw new InputError(`Unsupported retrieval mode: ${value}`, {
-    suggestedAction: 'Use --mode path or --mode hierarchical.',
+    suggestedAction: 'Use --mode path, --mode hierarchical, or --mode fulltext.',
   });
 }
 
