@@ -30,6 +30,29 @@ export function initializeProjectDatabaseSchema(
     );
   }
 
+  if (currentVersion === 0) {
+    const existingSchemaObjects = database
+      .prepare(`
+        SELECT name
+        FROM sqlite_schema
+        WHERE name NOT LIKE 'sqlite_%'
+        ORDER BY name
+      `)
+      .pluck()
+      .all();
+
+    if (existingSchemaObjects.length > 0) {
+      throw new ConfigurationError(
+        'The unversioned project database already contains schema objects; refusing to promote it.',
+        {
+          filePath: database.name,
+          suggestedAction:
+            'Back up the database and inspect its schema before initializing it with this application.',
+        },
+      );
+    }
+  }
+
   const migrate = database.transaction(() => {
     database.exec(`
       CREATE TABLE IF NOT EXISTS projects (

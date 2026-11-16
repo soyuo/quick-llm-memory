@@ -157,6 +157,29 @@ describe('project SQLite database', () => {
     unchanged.close();
   });
 
+  it('preserves and rejects a partial unversioned schema', () => {
+    const { projectRoot, project } = createProject();
+    const indexPath = join(projectRoot, 'index');
+    mkdirSync(indexPath);
+    const path = resolveProjectDatabasePath(projectRoot);
+    const partial = new Database(path);
+    partial.exec(`
+      CREATE TABLE documents (id TEXT PRIMARY KEY, title TEXT);
+      INSERT INTO documents (id, title) VALUES ('existing', 'Preserve me');
+    `);
+    partial.close();
+
+    expect(() => openProjectDatabase(projectRoot, project)).toThrow(ConfigurationError);
+
+    const unchanged = new Database(path, { readonly: true });
+    expect(unchanged.pragma('user_version', { simple: true })).toBe(0);
+    expect(unchanged.prepare('SELECT id, title FROM documents').get()).toEqual({
+      id: 'existing',
+      title: 'Preserve me',
+    });
+    unchanged.close();
+  });
+
   it('rejects invalid index and database paths without following them', () => {
     const first = createProject();
     const indexPath = join(first.projectRoot, 'index');
