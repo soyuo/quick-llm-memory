@@ -328,13 +328,17 @@ export function registerProjectCommands(
               : 'No matching documents fit the token budget.\n');
             return;
           }
-          for (const result of selectedResults) {
+          for (const [index, result] of selectedResults.entries()) {
+            const tokenCount = tokenBudget?.resultTokenCounts[index] ?? result.tokenCount;
+            const tokenCountLabel = tokenBudget === undefined
+              ? 'estimated tokens'
+              : 'estimated context tokens';
             writeOut(
               `- ${result.path} — ${result.title}\n` +
                 `  ${result.snippet}\n` +
                 `  Sources: ${result.sourceIds.join(', ') || 'none'}; ` +
                 `sections: ${result.matchedSections.join(', ') || 'none'}; ` +
-                `estimated tokens: ${result.tokenCount}\n` +
+                `${tokenCountLabel}: ${tokenCount}\n` +
                 (result.relatedFrom === undefined
                   ? ''
                   : `  Related to: ${result.relatedFrom.join(', ')}\n`),
