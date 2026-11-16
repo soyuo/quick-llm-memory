@@ -20,9 +20,20 @@ export interface HierarchyPlannerOptions {
   maxTokens?: number;
 }
 
+export interface HierarchyPlannerResponse {
+  hierarchy: HierarchyNode[];
+}
+
 export const HIERARCHY_PLANNER_SCHEMA: JsonSchema = {
-  type: 'array',
-  items: { $ref: '#/$defs/HierarchyNode' },
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    hierarchy: {
+      type: 'array',
+      items: { $ref: '#/$defs/HierarchyNode' },
+    },
+  },
+  required: ['hierarchy'],
   $defs: {
     HierarchyNode: {
       type: 'object',
@@ -73,7 +84,7 @@ export async function planKnowledgeHierarchy(
   }
 
   const prompt = createHierarchyPlannerPrompt(sections);
-  return options.provider.generateStructured<HierarchyNode[]>({
+  const response = await options.provider.generateStructured<HierarchyPlannerResponse>({
     model: options.model,
     systemPrompt: HIERARCHY_PLANNER_SYSTEM_PROMPT,
     prompt,
@@ -82,6 +93,7 @@ export async function planKnowledgeHierarchy(
     schemaName: 'qlm_knowledge_hierarchy',
     schema: HIERARCHY_PLANNER_SCHEMA,
   });
+  return response.hierarchy;
 }
 
 export function createHierarchyPlannerPrompt(
