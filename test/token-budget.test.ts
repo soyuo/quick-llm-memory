@@ -49,6 +49,16 @@ describe('retrieval token budget', () => {
     expect(selection.consumedTokens).toBe(0);
   });
 
+  it('accepts an exact fit and rejects a budget one token below it', () => {
+    const candidate = createResult('one', 'one.md', 'One', 'Body');
+    const exactCost = estimateRetrievalResultTokens(candidate);
+
+    expect(selectRetrievalResultsWithinTokenBudget([candidate], exactCost).results)
+      .toEqual([candidate]);
+    expect(selectRetrievalResultsWithinTokenBudget([candidate], exactCost - 1).results)
+      .toEqual([]);
+  });
+
   it.each([-1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1])(
     'rejects invalid budget %s',
     (maxTokens) => {
