@@ -31,6 +31,10 @@ export const documentFrontmatterSchema = z
   })
   .strict();
 
+export const documentDraftFrontmatterSchema = documentFrontmatterSchema.omit({
+  id: true,
+});
+
 export const categoryIndexFrontmatterSchema = z
   .object({
     ...frontmatterBaseSchema,
@@ -39,6 +43,9 @@ export const categoryIndexFrontmatterSchema = z
   .strict();
 
 export type DocumentFrontmatter = z.infer<typeof documentFrontmatterSchema>;
+export type DocumentDraftFrontmatter = z.infer<
+  typeof documentDraftFrontmatterSchema
+>;
 export type CategoryIndexFrontmatter = z.infer<
   typeof categoryIndexFrontmatterSchema
 >;
