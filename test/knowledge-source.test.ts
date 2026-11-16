@@ -173,6 +173,24 @@ describe('MarkdownDocumentParser', () => {
     });
   });
 
+  it('keeps heading paths compact when Markdown skips heading levels', async () => {
+    const root = makeTempDirectory();
+    const filePath = join(root, 'skipped-levels.md');
+    writeFileSync(filePath, '### Deep topic\nContent.\n');
+    const source = loadMarkdownSources(filePath)[0];
+    expect(source).toBeDefined();
+    if (source === undefined) {
+      throw new Error('Expected the Markdown source to load.');
+    }
+
+    const parsed = await new MarkdownDocumentParser().parse(source);
+
+    expect(parsed.sections).toMatchObject([
+      { title: 'Deep topic', headingPath: ['Deep topic'] },
+    ]);
+    expect(parsed.sections[0]?.headingPath.every((part) => part.length > 0)).toBe(true);
+  });
+
   it('rejects unsupported source formats', async () => {
     const source = {
       id: 'source-1',
