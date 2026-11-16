@@ -357,6 +357,21 @@ function validateCandidate(
     });
   }
 
+  const sourcesHeadingIndex = children.findIndex(
+    (node) => node.type === 'heading' && node.depth === 2 && headingText(node) === 'Sources',
+  );
+  const contentEnd = sourcesHeadingIndex < 0 ? children.length : sourcesHeadingIndex;
+  const hasGeneratedContent = children
+    .slice(1, contentEnd)
+    .some((node) => node.type !== 'heading' && headingText(node).trim().length > 0);
+  if (!hasGeneratedContent) {
+    diagnostics.push({
+      code: 'missing_content',
+      path: candidate.path,
+      message: 'Candidate must contain document content before its Sources section.',
+    });
+  }
+
   const sectionReferences = expectedMetadata.source_sections as string[];
   const sourcesText = markdownSectionText(parsed.body, children, 'Sources');
   if (

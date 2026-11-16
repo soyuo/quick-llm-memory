@@ -271,6 +271,33 @@ describe('generated Markdown validation', () => {
     }
   });
 
+  it('rejects a candidate containing only its title and source list', () => {
+    const structuralOnly = {
+      ...authenticationCandidate,
+      markdown: authenticationCandidate.markdown.replace(
+        '\n\nAuthentication content.\n\n## Sources',
+        '\n\n## Sources',
+      ),
+    };
+    const result = validateGeneratedDocuments(
+      [structuralOnly],
+      [securityCategory],
+      sections,
+    );
+
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.diagnostics).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: 'missing_content',
+            path: authenticationNode.path,
+          }),
+        ]),
+      );
+    }
+  });
+
   it('throws a typed error from the assertion helper', () => {
     expect(() => assertValidGeneratedDocuments([], [securityCategory], sections)).toThrow(
       GeneratedDocumentValidationError,
