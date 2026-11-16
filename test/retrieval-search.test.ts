@@ -10,6 +10,7 @@ import { runCli } from '../src/cli.js';
 import { createApplicationLogger } from '../src/logging/logger.js';
 import { createMarkdownDocument } from '../src/markdown/repository.js';
 import { initializeProject } from '../src/projects/manager.js';
+import { RRF_K } from '../src/retrieval/ranker.js';
 import { searchProjectDocuments } from '../src/retrieval/search.js';
 
 const temporaryDirectories: string[] = [];
@@ -40,7 +41,7 @@ describe('path and hierarchical retrieval', () => {
       title: 'Create VM',
       sourceIds: ['source-1'],
       matchedSections: ['source-1:section-1'],
-      score: 1,
+      score: 1 / (RRF_K + 1),
     });
     expect(results[0]?.tokenCount).toBeGreaterThan(0);
     expect(results[0]?.snippet).toContain('Create a virtual machine');
@@ -84,6 +85,83 @@ describe('path and hierarchical retrieval', () => {
       maxDepth: 1,
     });
     expect(root.map(({ path }) => path)).toEqual(['root.md']);
+
+    const ranked = searchProjectDocuments({
+      projectRoot,
+      project,
+      projectId: project.id,
+      query: 'security',
+      mode: 'hierarchical',
+    });
+    expect(ranked[0]?.score).toBeGreaterThan(ranked[1]?.score ?? 0);
+  });
+
+  it('fuses hierarchy and full-text candidates with stable scores and provenance', () => {
+    const { projectRoot, project } = createIndexedProject();
+
+    const results = searchProjectDocuments({
+      projectRoot,
+      project,
+      projectId: project.id,
+      query: 'security',
+      mode: 'hybrid',
+    });
+
+    expect(results.map(({ path }) => path)).toEqual([
+      'security/overview.md',
+      'security/vm/create.md',
+    ]);
+    expect(results[0]?.score).toBeGreaterThan(results[1]?.score ?? 0);
+    expect(results[0]?.sourceIds).toEqual(['source-2']);
+    expect(results[0]?.matchedSections).toEqual(['source-2:section-1']);
+  });
+
+  it('lets a replaceable ranker receive exact-path candidates', () => {
+    const { projectRoot, project } = createIndexedProject();
+    let receivedModes: string[] = [];
+
+    const results = searchProjectDocuments({
+      projectRoot,
+      project,
+      projectId: project.id,
+      query: 'security/overview.md',
+      mode: 'hybrid',
+      ranker: {
+        rank(sources) {
+          receivedModes = sources.map(({ mode }) => mode);
+          return sources.flatMap(({ results: sourceResults }) => [...sourceResults]);
+        },
+      },
+    });
+
+    expect(receivedModes).toEqual(['path', 'hierarchical']);
+    expect(results.map(({ path }) => path)).toEqual(['security/overview.md']);
+  });
+
+  it('passes hierarchy and full-text sources to a ranker and applies its limit afterward', () => {
+    const { projectRoot, project } = createIndexedProject();
+    let receivedModes: string[] = [];
+    let receivedMaximum = 0;
+
+    const results = searchProjectDocuments({
+      projectRoot,
+      project,
+      projectId: project.id,
+      query: 'security',
+      mode: 'hybrid',
+      maxResults: 1,
+      ranker: {
+        rank(sources, maxResults) {
+          receivedModes = sources.map(({ mode }) => mode);
+          receivedMaximum = maxResults;
+          return sources.flatMap(({ results: sourceResults }) => [...sourceResults]).reverse();
+        },
+      },
+    });
+
+    expect(receivedModes).toEqual(['hierarchical', 'fulltext']);
+    expect(receivedMaximum).toBe(1);
+    expect(results).toHaveLength(1);
   });
 
   it('rejects traversal and invalid limits, and returns an empty result for missing paths', () => {
@@ -181,6 +259,31 @@ describe('path and hierarchical retrieval', () => {
     expect(output.join('')).not.toContain('security/vm/create.md');
   });
 
+  it('exposes hybrid retrieval with hierarchy depth through qlm search', async () => {
+    const { dataRoot } = createIndexedProject();
+    const output: string[] = [];
+    const errorOutput: string[] = [];
+    const exitCode = await runCli(
+      ['node', 'qlm', 'search', 'security', '--project', 'demo', '--mode', 'hybrid'],
+      {
+        writeOut: (text) => output.push(text),
+        writeError: (text) => errorOutput.push(text),
+      },
+      {
+        runtimeFactory: () => ({
+          dataRoot,
+          logger: createApplicationLogger({ dataRoot, level: 'fatal' }),
+        }),
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(errorOutput.join('')).toBe('');
+    expect(output.join('')).toContain('Search results (hybrid)');
+    expect(output.join('')).toContain('security/overview.md');
+    expect(output.join('')).toContain('security/vm/create.md');
+  });
+
   it('rejects retrieval limits without an explicit mode', async () => {
     const { dataRoot } = createIndexedProject();
     const errorOutput: string[] = [];
@@ -232,7 +335,17 @@ describe('SQLite full-text retrieval', () => {
       maxResults: 1,
     });
     expect(bounded.map(({ path }) => path)).toEqual(['security/overview.md']);
-    expect(bounded[0]?.score).toBe(0);
+    expect(bounded[0]?.score).toBe(1 / (RRF_K + 1));
+
+    const relevant = searchProjectDocuments({
+      projectRoot,
+      project,
+      projectId: project.id,
+      query: 'security',
+      mode: 'fulltext',
+    });
+    expect(relevant[0]?.path).toBe('security/overview.md');
+    expect(relevant[0]?.score).toBeGreaterThan(relevant[1]?.score ?? 0);
     expect(readFileSync(join(knowledgeRoot, 'security/overview.md'), 'utf8'))
       .toContain('Security guidance.');
   });
