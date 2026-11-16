@@ -17,17 +17,7 @@ function fixture() {
   const project = initializeProject(dataRoot, 'demo');
   const projectRoot = join(dataRoot, 'projects', 'demo');
   const knowledgeRoot = join(projectRoot, 'knowledge');
-  createMarkdownDocument(knowledgeRoot, 'security/overview.md', {
-    metadata: {
-      type: 'document', schema_version: 1, depth: 1, title: 'Security Overview',
-      category: 'security', source_ids: ['source-1'], source_sections: ['source-1:section-1'],
-      related: [], status: 'draft', created_at: '2026-01-01T00:00:00.000Z',
-      updated_at: '2026-01-01T00:00:00.000Z',
-      generation: { provider: 'test', model: 'test', revision: 1 },
-    },
-    body: '\nAuthentication and access control.',
-  });
-  createMarkdownDocument(knowledgeRoot, 'security/deep/secrets.md', {
+  const secrets = createMarkdownDocument(knowledgeRoot, 'security/deep/secrets.md', {
     metadata: {
       type: 'document', schema_version: 1, depth: 2, title: 'Secrets',
       category: 'security/deep', source_ids: [], source_sections: [], related: [],
@@ -36,6 +26,16 @@ function fixture() {
       generation: { provider: 'test', model: 'test', revision: 1 },
     },
     body: '\nSecret storage guidance.',
+  });
+  createMarkdownDocument(knowledgeRoot, 'security/overview.md', {
+    metadata: {
+      type: 'document', schema_version: 1, depth: 1, title: 'Security Overview',
+      category: 'security', source_ids: ['source-1'], source_sections: ['source-1:section-1'],
+      related: [secrets.metadata.id], status: 'draft', created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+      generation: { provider: 'test', model: 'test', revision: 1 },
+    },
+    body: '\nAuthentication and access control.',
   });
   rebuildProjectIndex(projectRoot, project);
   return { dataRoot, projectRoot, knowledgeRoot };
@@ -65,8 +65,9 @@ describe('MCP read-only project tools', () => {
     await withClient(dataRoot, async (client) => {
       const { tools } = await client.listTools();
       expect(tools.map((tool) => tool.name).sort()).toEqual([
-        'memory_get_metadata', 'memory_get_tree', 'memory_list_projects',
-        'memory_read', 'memory_read_many', 'memory_search',
+        'memory_get_context', 'memory_get_metadata', 'memory_get_related',
+        'memory_get_tree', 'memory_list_projects', 'memory_read', 'memory_read_many',
+        'memory_search', 'memory_validate',
       ]);
       expect(tools.every((tool) => tool.annotations?.readOnlyHint === true)).toBe(true);
       const tree = tools.find((tool) => tool.name === 'memory_get_tree');
@@ -81,6 +82,102 @@ describe('MCP read-only project tools', () => {
       expect(readMany?.inputSchema.properties).toMatchObject({
         max_tokens: { maximum: 100_000 },
       });
+      expect(tools.filter((tool) => tool.name.startsWith('memory_get_') || tool.name === 'memory_validate')
+        .every((tool) => tool.annotations?.readOnlyHint === true)).toBe(true);
+    });
+  });
+
+  it('builds source-aware context within a token bound without changing project files', async () => {
+    const { dataRoot, projectRoot, knowledgeRoot } = fixture();
+    const databasePath = resolveProjectDatabasePath(projectRoot);
+    const beforeDatabase = readFileSync(databasePath);
+    const beforeMarkdown = readFileSync(join(knowledgeRoot, 'security/overview.md'));
+    await withClient(dataRoot, async (client) => {
+      const result = await client.callTool({
+        name: 'memory_get_context',
+        arguments: {
+          project: 'demo', query: 'authentication', mode: 'fulltext', max_tokens: 1000,
+        },
+      });
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        project: 'demo',
+        documents: [{ path: 'security/overview.md', title: 'Security Overview' }],
+        sources: [{ path: 'security/overview.md', sourceIds: ['source-1'] }],
+        tokenCountsAreEstimates: true,
+      });
+      const context = result.structuredContent as {
+        context: string; maxTokens: number; consumedTokens: number;
+      };
+      expect(context.context).toContain('Authentication');
+      expect(context.consumedTokens).toBeLessThanOrEqual(context.maxTokens);
+      expect(JSON.stringify(result.structuredContent)).not.toContain(dataRoot);
+
+      const zero = await client.callTool({
+        name: 'memory_get_context',
+        arguments: { project: 'demo', query: 'authentication', mode: 'fulltext', max_tokens: 0 },
+      });
+      expect(zero.structuredContent).toMatchObject({
+        context: '', documents: [], consumedTokens: 0,
+      });
+    });
+    expect(readFileSync(databasePath)).toEqual(beforeDatabase);
+    expect(readFileSync(join(knowledgeRoot, 'security/overview.md'))).toEqual(beforeMarkdown);
+  });
+
+  it('returns only direct related documents with bounded results and safe relative references', async () => {
+    const { dataRoot, projectRoot, knowledgeRoot } = fixture();
+    const databasePath = resolveProjectDatabasePath(projectRoot);
+    const beforeDatabase = readFileSync(databasePath);
+    await withClient(dataRoot, async (client) => {
+      const result = await client.callTool({
+        name: 'memory_get_related',
+        arguments: { project: 'demo', path: 'security/overview.md', max_results: 1 },
+      });
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        related: [{ path: 'security/deep/secrets.md', title: 'Secrets' }],
+      });
+      expect(JSON.stringify(result.structuredContent)).not.toContain(dataRoot);
+
+      const none = await client.callTool({
+        name: 'memory_get_related',
+        arguments: { project: 'demo', path: 'security/overview.md', max_results: 0 },
+      });
+      expect(none.structuredContent).toMatchObject({ related: [] });
+      const missing = await client.callTool({
+        name: 'memory_get_related',
+        arguments: { project: 'demo', path: '../outside.md' },
+      });
+      expect(missing.isError).toBe(true);
+      expect(JSON.stringify(missing)).not.toContain(dataRoot);
+      expect(readFileSync(databasePath)).toEqual(beforeDatabase);
+      expect(readFileSync(join(knowledgeRoot, 'security/overview.md'))).toBeTruthy();
+    });
+  });
+
+  it('validates project links and omits out-of-project targets and raw Markdown context', async () => {
+    const { dataRoot, projectRoot, knowledgeRoot } = fixture();
+    const sourcePath = join(knowledgeRoot, 'security/overview.md');
+    const maliciousBody = readFileSync(sourcePath, 'utf8') +
+      '\n[private](C:\\\\outside-secret\\\\key.md)\n';
+    writeFileSync(sourcePath, maliciousBody);
+    const databasePath = resolveProjectDatabasePath(projectRoot);
+    const beforeDatabase = readFileSync(databasePath);
+    await withClient(dataRoot, async (client) => {
+      const result = await client.callTool({
+        name: 'memory_validate',
+        arguments: { project: 'demo' },
+      });
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        project: 'demo', valid: false,
+        brokenLinks: [{ sourcePath: 'security/overview.md', reason: 'outside-root' }],
+      });
+      expect(JSON.stringify(result.structuredContent)).not.toContain('outside-secret');
+      expect(JSON.stringify(result.structuredContent)).not.toContain(dataRoot);
+      expect(readFileSync(sourcePath, 'utf8')).toBe(maliciousBody);
+      expect(readFileSync(databasePath)).toEqual(beforeDatabase);
     });
   });
 
