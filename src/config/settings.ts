@@ -26,7 +26,11 @@ export function loadSettings(options: LoadSettingsOptions = {}): Settings {
 
     throw new ConfigurationError(
       `Unable to read settings file: ${paths.configFile}`,
-      { filePath: paths.configFile, cause: error },
+      {
+        filePath: paths.configFile,
+        cause: error,
+        suggestedAction: 'Check that the settings file is readable.',
+      },
     );
   }
 
@@ -36,7 +40,11 @@ export function loadSettings(options: LoadSettingsOptions = {}): Settings {
   } catch (error) {
     throw new ConfigurationError(
       `Unable to parse settings file: ${paths.configFile}`,
-      { filePath: paths.configFile, cause: error },
+      {
+        filePath: paths.configFile,
+        cause: error,
+        suggestedAction: 'Correct the YAML syntax in the settings file.',
+      },
     );
   }
 
