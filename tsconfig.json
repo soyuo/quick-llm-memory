@@ -3,6 +3,7 @@
     "target": "ES2023",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
+    "jsx": "react-jsx",
     "strict": true,
     "noEmit": true,
     "esModuleInterop": true,
@@ -10,6 +11,12 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "vitest.config.ts"],
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "test/**/*.ts",
+    "test/**/*.tsx",
+    "vitest.config.ts"
+  ],
   "exclude": ["dist", "node_modules"]
 }
