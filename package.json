@@ -16,7 +16,6 @@
     "install": "node-gyp rebuild"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "^2.4.0",
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^24.19.2",
     "@types/react": "^19.3.0",
@@ -29,6 +28,7 @@
     "qlm": "./dist/index.js"
   },
   "dependencies": {
+    "@modelcontextprotocol/client": "^2.4.0",
     "@modelcontextprotocol/server": "^2.4.0",
     "better-sqlite3": "^13.2.0",
     "commander": "^15.1.0",

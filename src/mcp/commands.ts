@@ -3,6 +3,7 @@ import type { StdioServerHandle } from '@modelcontextprotocol/server/stdio';
 import { InputError } from '../errors/qlm-error.js';
 import {
   createMcpClientConfig,
+  createDefaultMcpStdioServerConfig,
   formatMcpClientConfig,
   type McpClient,
   type McpStdioServerConfig,
@@ -51,10 +52,7 @@ export function registerMcpCommands(
         );
       }
 
-      const server = options.stdioServerConfig ?? {
-        command: process.execPath,
-        args: [process.argv[1] ?? 'qlm', 'mcp', 'serve', '--transport', 'stdio'],
-      };
+      const server = options.stdioServerConfig ?? createDefaultMcpStdioServerConfig();
       const generated = createMcpClientConfig(clientName, server);
       const writeOut = options.writeOut ?? ((text: string) => process.stdout.write(text));
       writeOut(

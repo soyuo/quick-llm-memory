@@ -7,6 +7,13 @@ export interface McpStdioServerConfig {
   args: string[];
 }
 
+export function createDefaultMcpStdioServerConfig(): McpStdioServerConfig {
+  return {
+    command: process.execPath,
+    args: [process.argv[1] ?? 'qlm', 'mcp', 'serve', '--transport', 'stdio'],
+  };
+}
+
 export interface McpClientConfigOutput {
   path: string;
   config: Record<string, unknown>;
