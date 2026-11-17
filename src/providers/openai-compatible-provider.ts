@@ -3,6 +3,7 @@ import { InputError } from '../errors/qlm-error.js';
 import { ProviderError } from './provider-error.js';
 import type {
   AIProvider,
+  EmbeddingProvider,
   GenerateRequest,
   GenerateResponse,
   ModelInfo,
@@ -31,8 +32,11 @@ interface ChatCompletionResult {
 }
 
 const DEFAULT_SCHEMA_NAME = 'qlm_response';
+// The API accepts at most 8192 tokens per input and 300,000 tokens per request.
+// 32 inputs stay below the aggregate limit when every input is at its maximum.
+const MAX_EMBEDDING_BATCH_SIZE = 32;
 
-export class OpenAICompatibleProvider implements AIProvider {
+export class OpenAICompatibleProvider implements AIProvider, EmbeddingProvider {
   readonly id: string;
   readonly cacheIdentity: string;
 
@@ -96,6 +100,37 @@ export class OpenAICompatibleProvider implements AIProvider {
   async countTokens(text: string, model: string): Promise<TokenCount> {
     validateModel(model);
     return { count: Math.ceil(text.length / 4), isEstimate: true };
+  }
+
+  async embed(texts: string[], model: string): Promise<number[][]> {
+    validateModel(model);
+    if (texts.some((text) => typeof text !== 'string' || text.trim().length === 0)) {
+      throw new InputError('Embedding inputs must be non-empty strings.');
+    }
+    if (texts.length === 0) {
+      return [];
+    }
+
+    const vectors: number[][] = [];
+    let expectedDimensions: number | undefined;
+    for (let offset = 0; offset < texts.length; offset += MAX_EMBEDDING_BATCH_SIZE) {
+      const batch = texts.slice(offset, offset + MAX_EMBEDDING_BATCH_SIZE);
+      const payload = await this.request('/embeddings', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model, input: batch, encoding_format: 'float' }),
+      });
+      const batchVectors = parseEmbeddingResponse(payload, batch.length);
+      for (const vector of batchVectors) {
+        if (expectedDimensions === undefined) {
+          expectedDimensions = vector.length;
+        } else if (vector.length !== expectedDimensions) {
+          throw new ProviderError('Provider returned inconsistent embedding dimensions.');
+        }
+      }
+      vectors.push(...batchVectors);
+    }
+    return vectors;
   }
 
   private async complete(
@@ -228,5 +263,45 @@ function readUsage(value: unknown): GenerateResponse['usage'] {
     inputTokens: value.prompt_tokens,
     outputTokens: value.completion_tokens,
   };
+}
+
+function parseEmbeddingResponse(payload: unknown, expectedCount: number): number[][] {
+  if (!isJsonObject(payload) || !Array.isArray(payload.data) || payload.data.length !== expectedCount) {
+    throw new ProviderError('Provider returned an invalid embedding response.');
+  }
+
+  const vectors = new Array<number[] | undefined>(expectedCount);
+  let dimensions: number | undefined;
+  for (const item of payload.data) {
+    if (
+      !isJsonObject(item) ||
+      typeof item.index !== 'number' ||
+      !Number.isSafeInteger(item.index) ||
+      item.index < 0 ||
+      item.index >= expectedCount ||
+      !Array.isArray(item.embedding)
+    ) {
+      throw new ProviderError('Provider returned an invalid embedding item.');
+    }
+    if (vectors[item.index] !== undefined) {
+      throw new ProviderError('Provider returned duplicate embedding indexes.');
+    }
+    if (
+      item.embedding.length === 0 ||
+      !item.embedding.every((value) => typeof value === 'number' && Number.isFinite(value))
+    ) {
+      throw new ProviderError('Provider returned an invalid embedding vector.');
+    }
+    if (dimensions === undefined) {
+      dimensions = item.embedding.length;
+    } else if (item.embedding.length !== dimensions) {
+      throw new ProviderError('Provider returned inconsistent embedding dimensions.');
+    }
+    vectors[item.index] = item.embedding as number[];
+  }
+  if (vectors.some((vector) => vector === undefined)) {
+    throw new ProviderError('Provider returned an incomplete embedding response.');
+  }
+  return vectors as number[][];
 }
 
