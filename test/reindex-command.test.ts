@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { runCli } from '../src/cli.js';
+import { settingsSchema } from '../src/config/schema.js';
 import { resolveProjectDatabasePath } from '../src/database/database.js';
 import { createApplicationLogger } from '../src/logging/logger.js';
 import { createMarkdownDocument } from '../src/markdown/repository.js';
@@ -53,6 +54,10 @@ describe('qlm reindex command', () => {
         project_id: project.id,
         path: 'note.md',
       });
+      expect(database.prepare('SELECT provider_id, model, dimensions FROM project_embedding_metadata').get())
+        .toEqual({ provider_id: 'fake', model: 'test-embeddings', dimensions: 2 });
+      expect(database.prepare('SELECT kind, vector_json FROM document_embeddings').get())
+        .toEqual({ kind: 'document', vector_json: '[0.1,0.2]' });
     } finally {
       database.close();
     }
@@ -108,6 +113,15 @@ async function run(dataRoot: string, args: string[]) {
       runtimeFactory: () => ({
         dataRoot,
         logger: createApplicationLogger({ dataRoot, level: 'fatal' }),
+        settings: settingsSchema.parse({ ai: { embedding_model: 'test-embeddings' } }),
+      }),
+      providerFactory: () => ({
+        id: 'fake',
+        listModels: async () => [],
+        generate: async () => ({ model: 'fake', text: '' }),
+        generateStructured: async <T,>() => ({}) as T,
+        countTokens: async (text: string) => ({ count: Math.ceil(text.length / 4), isEstimate: true }),
+        embed: async (texts: string[]) => texts.map(() => [0.1, 0.2]),
       }),
     },
   );

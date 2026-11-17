@@ -5,7 +5,7 @@ import { loadSettings } from '../config/settings.js';
 import { resolveSettingsPaths } from '../config/paths.js';
 import { InputError } from '../errors/qlm-error.js';
 import type { Settings } from '../config/schema.js';
-import { rebuildProjectIndex } from '../database/reindex.js';
+import { rebuildProjectIndex, rebuildProjectIndexWithEmbeddings } from '../database/reindex.js';
 import {
   createApplicationLogger,
   logApplicationError,
@@ -15,7 +15,7 @@ import {
 } from '../logging/logger.js';
 import { validateInternalLinks } from '../markdown/link-validator.js';
 import { createConfiguredBuildProvider } from '../providers/configured-build-provider.js';
-import type { AIProvider } from '../providers/provider.js';
+import { isEmbeddingProvider, type AIProvider } from '../providers/provider.js';
 import { searchMarkdownDocuments } from '../markdown/search.js';
 import {
   searchProjectDocuments,
@@ -94,6 +94,7 @@ export function registerProjectCommands(
             provider,
             model,
             cacheGeneration: settings.ai?.cache_generation ?? true,
+            embeddingModel: settings.ai?.embedding_model ?? 'text-embedding-3-small',
             signal: controller.signal,
             onProgress: (event) => {
               const counts =
@@ -198,7 +199,7 @@ export function registerProjectCommands(
     .description('Rebuild the project SQLite index from Markdown')
     .requiredOption('--project <name>', 'Project to reindex')
     .action(async ({ project }: { project: string }) => {
-      await withProjectRuntime(runtimeFactory, async ({ dataRoot, logger }) => {
+      await withProjectRuntime(runtimeFactory, async ({ dataRoot, logger, settings: runtimeSettings }) => {
         const projectName = validateProjectName(project);
         const projectMetadata = listProjects(dataRoot).find(
           ({ name }) => name === projectName,
@@ -210,7 +211,14 @@ export function registerProjectCommands(
         }
 
         const projectRoot = join(dataRoot, 'projects', projectName);
-        const result = rebuildProjectIndex(projectRoot, projectMetadata);
+        const settings = runtimeSettings ?? loadSettings();
+        const provider = providerFactory(settings);
+        const result = isEmbeddingProvider(provider)
+          ? await rebuildProjectIndexWithEmbeddings(projectRoot, projectMetadata, {
+              provider,
+              model: settings.ai?.embedding_model ?? 'text-embedding-3-small',
+            })
+          : rebuildProjectIndex(projectRoot, projectMetadata);
         logProjectReindexed(logger, projectMetadata.id, result);
         writeOut(
           `Reindexed project ${projectName}: ${result.documents} document(s), ` +

@@ -52,3 +52,14 @@ export interface EmbeddingProvider {
 
   embed(texts: string[], model: string): Promise<number[][]>;
 }
+
+export function isEmbeddingProvider(value: unknown): value is EmbeddingProvider {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'id' in value &&
+    typeof value.id === 'string' &&
+    'embed' in value &&
+    typeof value.embed === 'function'
+  );
+}

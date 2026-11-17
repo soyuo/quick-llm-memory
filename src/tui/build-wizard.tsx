@@ -244,6 +244,7 @@ export function BuildWizard({
         project,
         provider,
         model: draft.model,
+        embeddingModel: settings.ai?.embedding_model ?? 'text-embedding-3-small',
         hierarchySettings: {
           minDepth: Number(draft.minDepth),
           maxDepth: Number(draft.maxDepth),

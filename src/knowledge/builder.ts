@@ -6,7 +6,11 @@ import {
   replaceProjectSourceSnapshot,
   type ProjectSourceSnapshot,
 } from '../database/source-snapshot.js';
-import { rebuildProjectIndex, type ProjectIndexRebuildResult } from '../database/reindex.js';
+import {
+  rebuildProjectIndex,
+  rebuildProjectIndexWithEmbeddings,
+  type ProjectIndexRebuildResult,
+} from '../database/reindex.js';
 import { openProjectDatabaseReadOnly } from '../database/database.js';
 import { InputError, QLM_ERROR_CODES, QLMError } from '../errors/qlm-error.js';
 import {
@@ -25,7 +29,7 @@ import {
 } from './document-generator.js';
 import { planKnowledgeHierarchy, type HierarchyNode } from './planner.js';
 import { planProjectKnowledgeImpact, type KnowledgeImpactPlan } from './impact-planner.js';
-import type { AIProvider } from '../providers/provider.js';
+import { isEmbeddingProvider, type AIProvider } from '../providers/provider.js';
 import type { ProjectMetadata } from '../projects/schema.js';
 import { loadMarkdownSources, type SourceSection } from './source.js';
 import { readStoredMarkdownSource } from '../markdown/repository.js';
@@ -79,6 +83,7 @@ export interface BuildProjectKnowledgeOptions {
   project: ProjectMetadata;
   provider: AIProvider;
   model: string;
+  embeddingModel?: string;
   hierarchySettings?: {
     minDepth: number;
     maxDepth: number;
@@ -373,6 +378,17 @@ export async function executePreparedKnowledgeBuild(
       return result;
     }
 
+    if (options.embeddingModel !== undefined) {
+      if (options.embeddingModel.trim().length === 0) {
+        throw new InputError('Embedding model must not be empty.');
+      }
+      if (!isEmbeddingProvider(options.provider)) {
+        throw new InputError('The configured provider does not support embeddings.', {
+          suggestedAction: 'Use the OpenAI-compatible provider to synchronize project embeddings.',
+        });
+      }
+    }
+
     const allPlannedDocuments = flattenPlannedDocuments(hierarchy);
     const incremental = prepared.selective;
     const regenerationPathKeys = new Set(prepared.regenerationPaths.map((path) => path.toLowerCase()));
@@ -519,7 +535,7 @@ export async function executePreparedKnowledgeBuild(
         ? { created: [], updated: [], removed: [] }
         : commitGeneratedDocuments(options.knowledgeRoot, committedCandidates, hierarchy, sections);
     const index = committedCandidates.length > 0
-      ? (emit({ stage: 'indexing' }), rebuildProjectIndex(options.projectRoot, options.project))
+      ? (emit({ stage: 'indexing' }), await rebuildBuildIndex(options))
       : incremental
         ? readProjectIndexCounts(options.projectRoot, options.project)
         : { categories: 0, documents: 0, relations: 0 };
@@ -555,6 +571,24 @@ export async function executePreparedKnowledgeBuild(
     emit({ stage: 'failed' });
     throw error;
   }
+}
+
+async function rebuildBuildIndex(
+  options: BuildProjectKnowledgeOptions,
+): Promise<ProjectIndexRebuildResult> {
+  const model = options.embeddingModel?.trim();
+  if (model === undefined || model.length === 0) {
+    return rebuildProjectIndex(options.projectRoot, options.project);
+  }
+  if (!isEmbeddingProvider(options.provider)) {
+    throw new InputError('The configured provider does not support embeddings.', {
+      suggestedAction: 'Use the OpenAI-compatible provider to synchronize project embeddings.',
+    });
+  }
+  return rebuildProjectIndexWithEmbeddings(options.projectRoot, options.project, {
+    provider: options.provider,
+    model,
+  });
 }
 
 function selectIncrementalDocuments(
