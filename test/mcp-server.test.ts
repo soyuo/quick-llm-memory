@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { runCli } from '../src/cli.js';
 import { serveMcpHttp } from '../src/mcp/http-server.js';
 import { serveMcpStdio } from '../src/mcp/server.js';
+import { initializeProject } from '../src/projects/manager.js';
 
 describe('MCP server bootstrap', () => {
   it('connects a local client and closes the MCP server', async () => {
@@ -48,6 +49,54 @@ describe('MCP server bootstrap', () => {
       expect(missing.status).toBe(404);
     } finally {
       await client.close().catch(() => {});
+      await server.close();
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps concurrent HTTP clients independent when one disconnects', async () => {
+    const dataRoot = mkdtempSync(join(tmpdir(), 'qlm-mcp-concurrent-'));
+    initializeProject(dataRoot, 'alpha');
+    initializeProject(dataRoot, 'beta');
+    const server = await serveMcpHttp({ host: '127.0.0.1', port: 0, dataRoot });
+    const alphaClient = new Client({ name: 'qlm-alpha-client', version: '1.0.0' });
+    const betaClient = new Client({ name: 'qlm-beta-client', version: '1.0.0' });
+    const alphaTransport = new StreamableHTTPClientTransport(new URL(server.url));
+    const betaTransport = new StreamableHTTPClientTransport(new URL(server.url));
+
+    try {
+      await Promise.all([
+        alphaClient.connect(alphaTransport),
+        betaClient.connect(betaTransport),
+      ]);
+      const [alphaResult, betaResult] = await Promise.all([
+        alphaClient.callTool({
+          name: 'memory_get_tree',
+          arguments: { project: 'alpha' },
+        }),
+        betaClient.callTool({
+          name: 'memory_get_tree',
+          arguments: { project: 'beta' },
+        }),
+      ]);
+
+      expect(alphaResult.isError).not.toBe(true);
+      expect(betaResult.isError).not.toBe(true);
+      expect((alphaResult.structuredContent as { project: string }).project).toBe('alpha');
+      expect((betaResult.structuredContent as { project: string }).project).toBe('beta');
+
+      await alphaClient.close();
+      await expect(betaClient.ping()).resolves.toBeDefined();
+      const betaAfterDisconnect = await betaClient.callTool({
+        name: 'memory_get_tree',
+        arguments: { project: 'beta' },
+      });
+      expect(betaAfterDisconnect.isError).not.toBe(true);
+      expect((betaAfterDisconnect.structuredContent as { project: string }).project)
+        .toBe('beta');
+    } finally {
+      await alphaClient.close().catch(() => {});
+      await betaClient.close().catch(() => {});
       await server.close();
       rmSync(dataRoot, { recursive: true, force: true });
     }
