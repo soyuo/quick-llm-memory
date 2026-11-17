@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import {
@@ -11,7 +11,7 @@ import {
   rebuildProjectIndexWithEmbeddings,
   type ProjectIndexRebuildResult,
 } from '../database/reindex.js';
-import { openProjectDatabaseReadOnly } from '../database/database.js';
+import { openProjectDatabaseReadOnly, resolveProjectDatabasePath } from '../database/database.js';
 import { InputError, QLM_ERROR_CODES, QLMError } from '../errors/qlm-error.js';
 import {
   commitGeneratedDocumentUpdates,
@@ -356,6 +356,11 @@ export async function executePreparedKnowledgeBuild(
     ensureNotCancelled();
     const { sources, sections, hierarchy, sourceSnapshot } = prepared;
     if (prepared.noOp || prepared.pendingOnly) {
+      let index: ProjectIndexRebuildResult = { categories: 0, documents: 0, relations: 0 };
+      if (prepared.noOp && needsEmbeddingSynchronization(options)) {
+        emit({ stage: 'indexing' });
+        index = await rebuildBuildIndex(options);
+      }
       const result: BuildProjectKnowledgeResult = {
         sources: sources.length,
         sections: sections.length,
@@ -363,7 +368,7 @@ export async function executePreparedKnowledgeBuild(
         documents: 0,
         candidates: [],
         commit: { created: [], updated: [], removed: [] },
-        index: { categories: 0, documents: 0, relations: 0 },
+        index,
         ...(prepared.noOp ? { noOp: true } : {}),
         ...(prepared.pendingRemovalPaths.length > 0
           ? { pendingRemovalPaths: prepared.pendingRemovalPaths }
@@ -570,6 +575,44 @@ export async function executePreparedKnowledgeBuild(
     }
     emit({ stage: 'failed' });
     throw error;
+  }
+}
+
+function needsEmbeddingSynchronization(options: BuildProjectKnowledgeOptions): boolean {
+  const model = options.embeddingModel?.trim();
+  if (model === undefined || model.length === 0) return false;
+  const databasePath = resolveProjectDatabasePath(options.projectRoot);
+  if (!existsSync(databasePath)) return true;
+
+  let database: ReturnType<typeof openProjectDatabaseReadOnly>;
+  try {
+    database = openProjectDatabaseReadOnly(options.projectRoot, options.project);
+  } catch {
+    return true;
+  }
+  try {
+    const { count: documentCount } = database.prepare(
+      'SELECT count(*) AS count FROM documents WHERE project_id = ?',
+    ).get(options.project.id) as { count: number };
+    if (documentCount === 0) return false;
+    const metadata = database.prepare(`
+      SELECT provider_id, model, dimensions
+      FROM project_embedding_metadata WHERE project_id = ?
+    `).get(options.project.id) as { provider_id: string; model: string; dimensions: number } | undefined;
+    if (
+      metadata === undefined ||
+      metadata.provider_id !== options.provider.id ||
+      metadata.model !== model
+    ) {
+      return true;
+    }
+    const { count: embeddingCount } = database.prepare(`
+      SELECT count(*) AS count FROM document_embeddings
+      WHERE project_id = ? AND model = ? AND dimensions = ?
+    `).get(options.project.id, model, metadata.dimensions) as { count: number };
+    return embeddingCount < documentCount;
+  } finally {
+    database.close();
   }
 }
 

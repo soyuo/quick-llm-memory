@@ -265,6 +265,50 @@ describe('incremental knowledge builds', () => {
     expect(hashFile(databasePath)).toBe(databaseBefore);
   });
 
+  it('refreshes vectors on a no-op build when the configured embedding model changes', async () => {
+    const fixture = createFixture();
+    const sections = await parseSections(fixture.sourcePath);
+    await buildProjectKnowledge({
+      ...fixture,
+      provider: new IncrementalProvider(createHierarchy(sections)),
+      model: 'test-model',
+      embeddingModel: 'embedding-v1',
+    });
+    const filesBefore = ['alpha.md', 'beta.md'].map((name) =>
+      readFileSync(join(fixture.knowledgeRoot, name)),
+    );
+    const provider = new IncrementalProvider(createHierarchy(sections));
+    const prepared = await prepareProjectKnowledgeBuild({
+      ...fixture,
+      provider,
+      model: 'test-model',
+      embeddingModel: 'embedding-v2',
+      incremental: true,
+    });
+
+    expect(prepared.noOp).toBe(true);
+    const result = await executePreparedKnowledgeBuild(prepared, {
+      ...fixture,
+      provider,
+      model: 'test-model',
+      embeddingModel: 'embedding-v2',
+      incremental: true,
+    });
+
+    expect(result.noOp).toBe(true);
+    expect(provider.requests).toHaveLength(0);
+    expect(provider.embeddingCalls).toBeGreaterThan(0);
+    expect(['alpha.md', 'beta.md'].map((name) => readFileSync(join(fixture.knowledgeRoot, name))))
+      .toEqual(filesBefore);
+    const database = new Database(resolveProjectDatabasePath(fixture.projectRoot), { readonly: true });
+    try {
+      expect(database.prepare('SELECT model FROM project_embedding_metadata').get())
+        .toEqual({ model: 'embedding-v2' });
+    } finally {
+      database.close();
+    }
+  });
+
   it('keeps outputs for deleted source sections unchanged pending review', async () => {
     const fixture = createFixture();
     const originalSections = await parseSections(fixture.sourcePath);
@@ -470,6 +514,7 @@ function hashFile(path: string): string {
 class IncrementalProvider implements AIProvider {
   readonly id = 'incremental-test-provider';
   readonly requests: StructuredRequest<unknown>[] = [];
+  embeddingCalls = 0;
 
   constructor(
     private readonly hierarchy: HierarchyNode[],
@@ -488,5 +533,9 @@ class IncrementalProvider implements AIProvider {
   }
   async countTokens(_text: string, _model: string): Promise<TokenCount> {
     return { count: 0, isEstimate: true };
+  }
+  async embed(texts: string[]): Promise<number[][]> {
+    this.embeddingCalls += 1;
+    return texts.map(() => [0.1, 0.2, 0.3]);
   }
 }
