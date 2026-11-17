@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -253,7 +254,7 @@ describe('project SQLite database', () => {
 });
 
 function createProject() {
-  const dataRoot = mkdtempSync(join(tmpdir(), 'qlm-database-'));
+  const dataRoot = realpathSync(mkdtempSync(join(tmpdir(), 'qlm-database-')));
   temporaryDirectories.push(dataRoot);
   const project = initializeProject(dataRoot, 'demo');
   return {

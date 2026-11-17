@@ -4,6 +4,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   unlinkSync,
   symlinkSync,
@@ -206,7 +207,7 @@ describe('project directory transfer', () => {
 });
 
 function createDirectory(prefix: string): string {
-  const path = mkdtempSync(join(tmpdir(), prefix));
+  const path = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
   temporaryRoots.push(path);
   return path;
 }
