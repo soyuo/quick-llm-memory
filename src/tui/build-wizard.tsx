@@ -226,6 +226,7 @@ export function BuildWizard({
           preserveCodeBlocks: draft.preserveCodeBlocks,
           preserveTables: draft.preserveTables,
         },
+        incremental: true,
         signal: analysisController.signal,
         onProgress: setProgress,
       };
@@ -425,18 +426,31 @@ export function BuildWizard({
       ) : null}
       {step === 'complete' ? (
         <>
-          <Text>Built project {draft.projectName}: {result?.sources ?? 0} source(s), {result?.sections ?? 0} section(s), {formatCount(result?.categories ?? 0, 'category')}, {result?.documents ?? 0} document(s).</Text>
-          <Text>Index now contains {result?.index.documents ?? 0} document(s).</Text>
-          <Text>Validation passed; the generated documents were committed and indexed.</Text>
+          {result?.noOp === true ? (
+            <Text>No affected documents; existing knowledge and index are unchanged.</Text>
+          ) : result?.pendingRemovalPaths?.length ? (
+            <Text>No documents were regenerated; outputs affected only by deleted source content remain pending review.</Text>
+          ) : (
+            <>
+              <Text>Built project {draft.projectName}: {result?.sources ?? 0} source(s), {result?.sections ?? 0} section(s), {formatCount(result?.categories ?? 0, 'category')}, {result?.documents ?? 0} document(s).</Text>
+              <Text>Index now contains {result?.index.documents ?? 0} document(s).</Text>
+              <Text>Validation passed; the generated documents were committed and indexed.</Text>
+            </>
+          )}
           {result?.commit.created.map((path) => <Text key={`created-${path}`}>Created: {path}</Text>)}
           {result?.commit.updated.map((path) => <Text key={`updated-${path}`}>Updated: {path}</Text>)}
           {result?.commit.removed.map((path) => <Text key={`removed-${path}`}>Removed: {path}</Text>)}
+          {result?.pendingRemovalPaths?.map((path) => <Text key={`pending-removal-${path}`}>Pending removal review: {path}</Text>)}
           <Text>Press Enter to return to the dashboard.</Text>
         </>
       ) : (
         <>
           {step === 'preview' ? <HierarchyPreview prepared={prepared} /> : null}
-          {step === 'confirmation' ? <Text>Generate documents and update the project? Press y to confirm or Esc to return to the preview.</Text> : null}
+          {step === 'confirmation' ? (
+            <Text>{prepared?.noOp === true || prepared?.pendingOnly === true
+              ? 'No document writes are planned. Press y to finish or Esc to return to the preview.'
+              : 'Generate documents and update the project? Press y to confirm or Esc to return to the preview.'}</Text>
+          ) : null}
           {step === 'analysis' || step === 'generation' || step === 'validation' ? (
             <Text>{progress?.stage ?? (step === 'analysis' ? 'Preparing sources and hierarchy...' : 'Starting build...')}{progress?.completed === undefined ? '' : ` (${progress.completed}/${progress.total ?? '?'})`}{progress?.message ? `: ${progress.message}` : ''}</Text>
           ) : null}
@@ -470,9 +484,16 @@ function HierarchyPreview({ prepared }: { prepared: PreparedKnowledgeBuild | und
       <Text>{prepared?.sources.length ?? 0} source(s), {prepared?.sections.length ?? 0} section(s); source changes:</Text>
       {changes.map((change) => <Text key={change.key}>{change.text}</Text>)}
       <Text>Proposed structure:</Text>
-      {lines.length === 0 ? <Text>(no documents)</Text> : lines.map((line) => <Text key={line.key}>{line.text}</Text>)}
-      <Text>Impact plan: {affectedDocuments.length} document(s) to regenerate, {unaffectedCount} unaffected, {impact?.categoryIndexes.length ?? 0} parent index(es), {impact?.removedSources.length ?? 0} removed source(s) for review.</Text>
-      {affectedDocuments.map((document) => <Text key={`impact:${document.id}`}>[Regenerate] {document.path} ({document.reasons.join(', ')})</Text>)}
+      {prepared?.pendingOnly === true
+        ? <Text>Outputs affected only by deleted source content remain unchanged and pending review.</Text>
+        : prepared?.noOp === true
+          ? <Text>No existing generated documents are affected; the current structure will be kept.</Text>
+        : lines.length === 0 ? <Text>(no documents)</Text> : lines.map((line) => <Text key={line.key}>{line.text}</Text>)}
+      <Text>Impact plan: {prepared?.regenerationPaths.length ?? 0} document(s) to regenerate, {unaffectedCount} unaffected, {prepared?.pendingRemovalPaths.length ?? 0} output(s) pending removal review, {impact?.categoryIndexes.length ?? 0} parent index(es), {impact?.removedSources.length ?? 0} removed source(s) for review.</Text>
+      {affectedDocuments
+        .filter((document) => prepared?.regenerationPaths.some((path) => path.toLowerCase() === document.path.toLowerCase()))
+        .map((document) => <Text key={`impact:${document.id}`}>[Regenerate] {document.path} ({document.reasons.join(', ')})</Text>)}
+      {prepared?.pendingRemovalPaths.map((path) => <Text key={`pending-removal:${path}`}>[Pending removal review] {path}</Text>)}
       {impact?.categoryIndexes.map((category) => <Text key={`impact-index:${category.path}`}>[Update index] {category.path}</Text>)}
       {impact?.removedSources.map((source) => <Text key={`removed-source:${source.sourceId}`}>[Review removed source] {source.path} ({source.documentIds.length} linked document(s))</Text>)}
     </Box>

@@ -1,13 +1,15 @@
 import React from 'react';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { render } from 'ink-testing-library';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openProjectDatabaseReadOnly, resolveProjectDatabasePath } from '../src/database/database.js';
 import { rebuildProjectIndex } from '../src/database/reindex.js';
+import { replaceProjectSourceSnapshot } from '../src/database/source-snapshot.js';
 import { initializeProject, listProjects } from '../src/projects/manager.js';
 import { MarkdownDocumentParser } from '../src/knowledge/markdown-parser.js';
+import { createProjectSourceSnapshot } from '../src/knowledge/source-changes.js';
 import { loadMarkdownSources } from '../src/knowledge/source.js';
 import type { HierarchyNode } from '../src/knowledge/planner.js';
 import type { AIProvider, GenerateRequest, GenerateResponse, ModelInfo, StructuredRequest, TokenCount } from '../src/providers/provider.js';
@@ -62,12 +64,25 @@ describe('TUI knowledge build setup wizard', () => {
     const unrelatedDocumentPath = join(knowledgeRoot, 'unrelated.md');
     writeFileSync(unrelatedDocumentPath, existingDocument('unrelated', 'Unrelated'));
     rebuildProjectIndex(projectRoot, project);
+    replaceProjectSourceSnapshot(
+      projectRoot,
+      project,
+      createProjectSourceSnapshot(realpathSync(sourceFile), [source], parsed.sections),
+    );
+    writeFileSync(sourceFile, '# Notes\n\nUpdated source material.\n');
+    const updatedSource = loadMarkdownSources(sourceFile)[0];
+    if (updatedSource === undefined) throw new Error('Expected the updated Markdown source fixture.');
+    const updatedParsed = await new MarkdownDocumentParser().parse(updatedSource);
     const databasePath = resolveProjectDatabasePath(projectRoot);
     const originalDatabase = readFileSync(databasePath);
     const provider = new FakeWizardProvider([{
-      id: 'notes', name: 'Notes', type: 'document', path: 'notes.md',
-      description: 'Source notes.', sourceSectionIds: parsed.sections.map(({ id }) => id),
-      relatedDocumentIds: [], children: [],
+      id: 'security', name: 'Security', type: 'category', path: 'security',
+      description: 'Security topics.', sourceSectionIds: [], relatedDocumentIds: [],
+      children: [{
+        id: 'related', name: 'Related', type: 'document', path: 'security/related.md',
+        description: 'Related source notes.', sourceSectionIds: updatedParsed.sections.map(({ id }) => id),
+        relatedDocumentIds: [], children: [],
+      }],
     }]);
     const settingsFile = join(dataRoot, 'config', 'config.yaml');
     mkdirSync(join(dataRoot, 'config'));
@@ -124,9 +139,9 @@ describe('TUI knowledge build setup wizard', () => {
     await waitForFrame(app, '8/12 Structure Preview');
     const previewFrame = (app.lastFrame() ?? '').replace(/\s+/gu, ' ');
     expect(app.lastFrame()).toContain('notes.md');
-    expect(app.lastFrame()).toContain('[Added] source file: notes.md');
-    expect(app.lastFrame()).toContain('[Added] section: notes.md');
-    expect(previewFrame).toContain('Impact plan: 1 document(s) to regenerate, 1 unaffected, 1 parent index(es), 0 removed source(s) for review.');
+    expect(app.lastFrame()).toContain('[Modified] source file: notes.md');
+    expect(app.lastFrame()).toContain('[Modified] section: notes.md');
+    expect(previewFrame).toContain('Impact plan: 1 document(s) to regenerate, 1 unaffected, 0 output(s) pending removal review, 1 parent index(es), 0 removed source(s) for review.');
     expect(app.lastFrame()).toContain('[Regenerate] security/related.md');
     expect(app.lastFrame()).toContain('[Update index] security/index.md');
     expect(provider.requests.map(({ schemaName }) => schemaName)).toEqual(['qlm_knowledge_hierarchy']);
@@ -157,13 +172,13 @@ describe('TUI knowledge build setup wizard', () => {
     expect(provider.requests[1]?.prompt).toContain('Aim for approximately 1000 tokens.');
     expect(provider.requests[1]?.prompt).toContain('Preserve source code blocks intact');
     expect(provider.requests[1]?.prompt).toContain('Preserve source tables');
-    expect(readFileSync(join(dataRoot, 'projects', project.name, 'knowledge', 'notes.md'), 'utf8'))
+    expect(readFileSync(existingDocumentPath, 'utf8'))
       .toContain('Generated knowledge document.');
     expect(readFileSync(settingsFile, 'utf8')).toBe('logging:\n  level: info\n');
     app.stdin.write('\r');
     await flushInkEffects();
     expect(app.lastFrame()).toContain('Selected project: quick-llm');
-    expect(app.lastFrame()).toContain('Knowledge: 1 categories, 1 documents');
+    expect(app.lastFrame()).toContain('Knowledge: 1 categories, 2 documents');
     expect(listProjects(dataRoot)).toHaveLength(1);
     app.unmount();
   }, 15_000);
