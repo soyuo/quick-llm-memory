@@ -1,7 +1,9 @@
 import React, { useRef, useState } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import { extname, join } from 'node:path';
-import { lstatSync } from 'node:fs';
+import { lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { settingsSchema, type Settings } from '../config/schema.js';
 import {
   BuildCancelledError,
@@ -10,6 +12,9 @@ import {
   type BuildProgressEvent,
   type BuildProjectKnowledgeOptions,
   type BuildProjectKnowledgeResult,
+  type DocumentConflictAction,
+  type DocumentConflictResolution,
+  type GeneratedDocumentConflict,
   type PreparedKnowledgeBuild,
 } from '../knowledge/builder.js';
 import { loadMarkdownSources } from '../knowledge/source.js';
@@ -17,6 +22,7 @@ import { createConfiguredBuildProvider } from '../providers/configured-build-pro
 import type { AIProvider } from '../providers/provider.js';
 import { listProjects } from '../projects/manager.js';
 import { projectNameSchema } from '../projects/schema.js';
+import { sanitizeTerminalText } from './terminal-text.js';
 
 type BuildWizardSetupStep = 'project' | 'sources' | 'provider' | 'model' | 'hierarchy' | 'document';
 
@@ -27,6 +33,7 @@ export type BuildWizardStep =
   | 'confirmation'
   | 'generation'
   | 'validation'
+  | 'conflicts'
   | 'failed'
   | 'complete';
 
@@ -45,6 +52,11 @@ export interface BuildWizardDraft {
   preserveTables: boolean;
 }
 
+export type BuildWizardMergeEditor = (
+  currentMarkdown: string,
+  candidateMarkdown: string,
+) => Promise<string | undefined>;
+
 const STEPS: BuildWizardSetupStep[] = [
   'project', 'sources', 'provider', 'model', 'hierarchy', 'document',
 ];
@@ -61,6 +73,7 @@ const STEP_TITLES: Record<BuildWizardStep, string> = {
   confirmation: '9/12 Confirmation',
   generation: '10/12 Generation',
   validation: '11/12 Validation',
+  conflicts: 'Edited Document Review',
   complete: '12/12 Complete',
   failed: 'Build Failed',
 };
@@ -154,6 +167,7 @@ export interface BuildWizardProps {
   onCancel: () => void;
   onBuildComplete: (projectName: string) => void;
   providerFactory?: (settings: Settings) => AIProvider;
+  mergeEditor?: BuildWizardMergeEditor;
 }
 
 export function BuildWizard({
@@ -161,8 +175,9 @@ export function BuildWizard({
   onCancel,
   onBuildComplete,
   providerFactory = createConfiguredBuildProvider,
+  mergeEditor,
 }: BuildWizardProps): React.JSX.Element {
-  const { exit } = useApp();
+  const { exit, suspendTerminal } = useApp();
   const [step, setStep] = useState<BuildWizardStep>('project');
   const [draft, setDraft] = useState<BuildWizardDraft>(() => ({ ...DEFAULT_DRAFT }));
   const [fieldIndex, setFieldIndex] = useState(0);
@@ -170,6 +185,13 @@ export function BuildWizard({
   const [prepared, setPrepared] = useState<PreparedKnowledgeBuild | undefined>();
   const [progress, setProgress] = useState<BuildProgressEvent | undefined>();
   const [result, setResult] = useState<BuildProjectKnowledgeResult | undefined>();
+  const [conflicts, setConflicts] = useState<GeneratedDocumentConflict[]>([]);
+  const [conflictIndex, setConflictIndex] = useState(0);
+  const [conflictActions, setConflictActions] = useState<Record<string, DocumentConflictAction>>({});
+  const [mergedDocuments, setMergedDocuments] = useState<Record<string, string>>({});
+  const [compareMode, setCompareMode] = useState(false);
+  const [conflictResolutionError, setConflictResolutionError] = useState<string | undefined>();
+  const conflictResolver = useRef<((value: Readonly<Record<string, DocumentConflictResolution>>) => void) | undefined>(undefined);
   const controller = useRef<AbortController | undefined>(undefined);
   const options = useRef<BuildProjectKnowledgeOptions | undefined>(undefined);
 
@@ -261,6 +283,16 @@ export function BuildWizard({
         setStep('generation');
       }
     };
+    buildOptions.onDocumentConflicts = (pendingConflicts) => new Promise((resolve) => {
+      setConflicts([...pendingConflicts]);
+      setConflictIndex(0);
+      setConflictActions(Object.fromEntries(pendingConflicts.map(({ path }) => [path, 'keep' as const])));
+      setMergedDocuments({});
+      setCompareMode(false);
+      setConflictResolutionError(undefined);
+      conflictResolver.current = resolve;
+      setStep('conflicts');
+    });
     try {
       const buildResult = await executePreparedKnowledgeBuild(prepared, buildOptions);
       setResult(buildResult);
@@ -278,7 +310,11 @@ export function BuildWizard({
 
   useInput((input, key) => {
     if (key.ctrl && input.toLowerCase() === 'c') {
-      if (controller.current !== undefined) controller.current.abort();
+      if (step === 'conflicts') {
+        controller.current?.abort(new Error('Conflict review cancelled.'));
+        conflictResolver.current?.({});
+        conflictResolver.current = undefined;
+      } else if (controller.current !== undefined) controller.current.abort();
       else exit();
       return;
     }
@@ -288,6 +324,13 @@ export function BuildWizard({
       else if (step === 'generation' || step === 'validation') {
         if (progress?.stage !== 'committing' && progress?.stage !== 'indexing') {
           controller.current?.abort();
+        }
+      } else if (step === 'conflicts') {
+        if (compareMode) setCompareMode(false);
+        else {
+          controller.current?.abort(new Error('Conflict review cancelled.'));
+          conflictResolver.current?.({});
+          conflictResolver.current = undefined;
         }
       } else if (step === 'preview') {
         setPrepared(undefined);
@@ -309,6 +352,67 @@ export function BuildWizard({
     }
 
     if (step === 'analysis' || step === 'generation' || step === 'validation') return;
+    if (step === 'conflicts') {
+      const conflict = conflicts[conflictIndex];
+      if (conflict === undefined) return;
+      if (compareMode) {
+        if (key.escape || input.toLowerCase() === 'c') setCompareMode(false);
+        return;
+      }
+      if (key.upArrow || key.leftArrow) {
+        setConflictIndex((index) => (index + conflicts.length - 1) % conflicts.length);
+        return;
+      }
+      if (key.downArrow || key.rightArrow) {
+        setConflictIndex((index) => (index + 1) % conflicts.length);
+        return;
+      }
+      const actionKey: Record<string, DocumentConflictAction> = {
+        k: 'keep', a: 'apply', x: 'exclude',
+      };
+      const action = actionKey[input.toLowerCase()];
+      if (action !== undefined) {
+        setConflictActions((current) => ({ ...current, [conflict.path]: action }));
+        setConflictResolutionError(undefined);
+        return;
+      }
+      if (input.toLowerCase() === 'c') {
+        setCompareMode(true);
+        return;
+      }
+      if (input.toLowerCase() === 'm') {
+        void (async () => {
+          try {
+            const merged = await (mergeEditor ?? ((currentMarkdown, candidateMarkdown) =>
+              editDocumentMerge(currentMarkdown, candidateMarkdown, suspendTerminal)))(
+              conflict.currentMarkdown,
+              conflict.candidate.markdown,
+            );
+            if (merged !== undefined) {
+              setMergedDocuments((current) => ({ ...current, [conflict.path]: merged }));
+              setConflictActions((current) => ({ ...current, [conflict.path]: 'merge' }));
+              setConflictResolutionError(undefined);
+            }
+          } catch (cause) {
+            setConflictResolutionError(getBuildErrorMessage(cause));
+          }
+        })();
+        return;
+      }
+      if (key.return) {
+        const resolution: Record<string, DocumentConflictResolution> = {};
+        for (const item of conflicts) {
+          const selectedAction = conflictActions[item.path] ?? 'keep';
+          resolution[item.path] = selectedAction === 'merge'
+            ? { action: 'merge', mergedMarkdown: mergedDocuments[item.path] }
+            : { action: selectedAction };
+        }
+        conflictResolver.current?.(resolution);
+        conflictResolver.current = undefined;
+        return;
+      }
+      return;
+    }
     if (step === 'preview') {
       if (key.return) setStep('confirmation');
       return;
@@ -430,6 +534,8 @@ export function BuildWizard({
             <Text>No affected documents; existing knowledge and index are unchanged.</Text>
           ) : result?.pendingRemovalPaths?.length ? (
             <Text>No documents were regenerated; outputs affected only by deleted source content remain pending review.</Text>
+          ) : result?.documents === 0 && (result.conflictResolutions?.length ?? 0) > 0 ? (
+            <Text>No generated documents were applied; the reviewed documents remain unchanged.</Text>
           ) : (
             <>
               <Text>Built project {draft.projectName}: {result?.sources ?? 0} source(s), {result?.sections ?? 0} section(s), {formatCount(result?.categories ?? 0, 'category')}, {result?.documents ?? 0} document(s).</Text>
@@ -441,11 +547,22 @@ export function BuildWizard({
           {result?.commit.updated.map((path) => <Text key={`updated-${path}`}>Updated: {path}</Text>)}
           {result?.commit.removed.map((path) => <Text key={`removed-${path}`}>Removed: {path}</Text>)}
           {result?.pendingRemovalPaths?.map((path) => <Text key={`pending-removal-${path}`}>Pending removal review: {path}</Text>)}
+          {result?.conflictResolutions?.map(({ path, action }) => <Text key={`conflict-${path}`}>{action === 'keep' ? 'Kept edited document' : action === 'exclude' ? 'Excluded edited document' : `Resolved edited document (${action})`}: {path}</Text>)}
           <Text>Press Enter to return to the dashboard.</Text>
         </>
       ) : (
         <>
           {step === 'preview' ? <HierarchyPreview prepared={prepared} /> : null}
+          {step === 'conflicts' ? (
+            <ConflictReview
+              conflicts={conflicts}
+              index={conflictIndex}
+              actions={conflictActions}
+              mergedDocuments={mergedDocuments}
+              compareMode={compareMode}
+              error={conflictResolutionError}
+            />
+          ) : null}
           {step === 'confirmation' ? (
             <Text>{prepared?.noOp === true || prepared?.pendingOnly === true
               ? 'No document writes are planned. Press y to finish or Esc to return to the preview.'
@@ -489,15 +606,102 @@ function HierarchyPreview({ prepared }: { prepared: PreparedKnowledgeBuild | und
         : prepared?.noOp === true
           ? <Text>No existing generated documents are affected; the current structure will be kept.</Text>
         : lines.length === 0 ? <Text>(no documents)</Text> : lines.map((line) => <Text key={line.key}>{line.text}</Text>)}
-      <Text>Impact plan: {prepared?.regenerationPaths.length ?? 0} document(s) to regenerate, {unaffectedCount} unaffected, {prepared?.pendingRemovalPaths.length ?? 0} output(s) pending removal review, {impact?.categoryIndexes.length ?? 0} parent index(es), {impact?.removedSources.length ?? 0} removed source(s) for review.</Text>
+      <Text>Impact plan: {prepared?.regenerationPaths.length ?? 0} document(s) to regenerate, {prepared?.documentConflicts.length ?? 0} edited document(s) need review, {unaffectedCount} unaffected, {prepared?.pendingRemovalPaths.length ?? 0} output(s) pending removal review, {impact?.categoryIndexes.length ?? 0} parent index(es), {impact?.removedSources.length ?? 0} removed source(s) for review.</Text>
       {affectedDocuments
         .filter((document) => prepared?.regenerationPaths.some((path) => path.toLowerCase() === document.path.toLowerCase()))
         .map((document) => <Text key={`impact:${document.id}`}>[Regenerate] {document.path} ({document.reasons.join(', ')})</Text>)}
       {prepared?.pendingRemovalPaths.map((path) => <Text key={`pending-removal:${path}`}>[Pending removal review] {path}</Text>)}
+      {prepared?.documentConflicts.map(({ path, reason }) => <Text key={`document-conflict:${path}`}>[Edited document: {reason === 'missing-baseline' ? 'no baseline' : 'content changed'}] {path}</Text>)}
       {impact?.categoryIndexes.map((category) => <Text key={`impact-index:${category.path}`}>[Update index] {category.path}</Text>)}
       {impact?.removedSources.map((source) => <Text key={`removed-source:${source.sourceId}`}>[Review removed source] {source.path} ({source.documentIds.length} linked document(s))</Text>)}
     </Box>
   );
+}
+
+function ConflictReview({
+  conflicts,
+  index,
+  actions,
+  mergedDocuments,
+  compareMode,
+  error,
+}: {
+  conflicts: readonly GeneratedDocumentConflict[];
+  index: number;
+  actions: Readonly<Record<string, DocumentConflictAction>>;
+  mergedDocuments: Readonly<Record<string, string>>;
+  compareMode: boolean;
+  error: string | undefined;
+}): React.JSX.Element {
+  const conflict = conflicts[index];
+  if (conflict === undefined) return <Text>No edited documents need review.</Text>;
+  const action = actions[conflict.path] ?? 'keep';
+  if (compareMode) {
+    const lines = renderConflictDiff(conflict.currentMarkdown, conflict.candidate.markdown);
+    return (
+      <Box flexDirection="column">
+        <Text bold>Compare current and generated: {sanitizeTerminalText(conflict.path)} ({index + 1}/{conflicts.length})</Text>
+        {lines.map((line, lineIndex) => <Text key={`${lineIndex}:${line}`}>{sanitizeTerminalText(line)}</Text>)}
+        <Text>Esc or c returns to conflict choices.</Text>
+      </Box>
+    );
+  }
+  return (
+    <Box flexDirection="column">
+      <Text bold>Review edited document {index + 1}/{conflicts.length}: {sanitizeTerminalText(conflict.path)}</Text>
+      <Text>{conflict.reason === 'missing-baseline' ? 'This document has no generated-content baseline.' : 'This document differs from its last generated baseline.'}</Text>
+      <Text>Current SHA-256: {sanitizeTerminalText(conflict.currentContentHash)}</Text>
+      <Text>Choice: {action}{mergedDocuments[conflict.path] === undefined ? '' : ' (manual merge ready)'}</Text>
+      <Text>k keep current; a apply generated; c compare; m edit a merge; x exclude this document.</Text>
+      <Text>Up/Down selects a conflict. Enter confirms all choices; Esc cancels without writing.</Text>
+      {error === undefined ? null : <Text color="red">{sanitizeTerminalText(error)}</Text>}
+    </Box>
+  );
+}
+
+function renderConflictDiff(currentMarkdown: string, candidateMarkdown: string): string[] {
+  const current = currentMarkdown.split(/\r?\n/u);
+  const generated = candidateMarkdown.split(/\r?\n/u);
+  const count = Math.min(Math.max(current.length, generated.length), 80);
+  const lines: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const currentLine = current[index];
+    const generatedLine = generated[index];
+    if (currentLine === generatedLine) {
+      if (currentLine !== undefined) lines.push(`  ${currentLine}`);
+    } else {
+      if (currentLine !== undefined) lines.push(`- ${currentLine}`);
+      if (generatedLine !== undefined) lines.push(`+ ${generatedLine}`);
+    }
+  }
+  if (Math.max(current.length, generated.length) > count) lines.push('… comparison truncated after 80 lines …');
+  return lines;
+}
+
+async function editDocumentMerge(
+  currentMarkdown: string,
+  candidateMarkdown: string,
+  suspendTerminal: (callback: () => void | Promise<void>) => Promise<void>,
+): Promise<string> {
+  const directory = mkdtempSync(join(tmpdir(), 'quick-llm-merge-'));
+  const currentPath = join(directory, 'current.md');
+  const candidatePath = join(directory, 'merge.md');
+  try {
+    writeFileSync(currentPath, currentMarkdown, { mode: 0o400 });
+    writeFileSync(candidatePath, candidateMarkdown, { mode: 0o600 });
+    const editor = process.env.VISUAL ?? process.env.EDITOR ?? (process.platform === 'win32' ? 'notepad' : 'vi');
+    await suspendTerminal(() => {
+      const result = spawnSync(editor, [currentPath, candidatePath], {
+        stdio: 'inherit',
+        shell: true,
+      });
+      if (result.error !== undefined) throw result.error;
+      if (result.status !== 0) throw new Error(`Editor exited with status ${result.status ?? 'unknown'}.`);
+    });
+    return readFileSync(candidatePath, 'utf8');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 function capitalize(value: string): string {
