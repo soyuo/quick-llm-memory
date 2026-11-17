@@ -99,6 +99,13 @@ describe('qlm build command', () => {
       expect(database.prepare('SELECT id, path FROM documents').all()).toEqual([
         { id: 'security-authentication', path: 'security/authentication.md' },
       ]);
+      expect(database.prepare(
+        'SELECT provider_id, model, dimensions FROM project_embedding_metadata',
+      ).get()).toEqual({
+        provider_id: 'fake-provider',
+        model: 'text-embedding-3-small',
+        dimensions: 3,
+      });
     } finally {
       database.close();
     }
@@ -431,5 +438,9 @@ class FakeBuildProvider implements AIProvider {
 
   async countTokens(_text: string, _model: string): Promise<TokenCount> {
     return { count: 0, isEstimate: true };
+  }
+
+  async embed(texts: string[]): Promise<number[][]> {
+    return texts.map(() => [0.1, 0.2, 0.3]);
   }
 }
