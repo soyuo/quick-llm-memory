@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { resolveProjectDatabasePath } from '../src/database/database.js';
+import { projectEmbeddingsAreCurrent } from '../src/database/reindex.js';
 import {
   buildProjectKnowledge,
   executePreparedKnowledgeBuild,
@@ -307,6 +308,57 @@ describe('incremental knowledge builds', () => {
     } finally {
       database.close();
     }
+  });
+
+  it('refreshes stale vectors on a no-op build when stored Markdown was edited', async () => {
+    const fixture = createFixture();
+    const sections = await parseSections(fixture.sourcePath);
+    await buildProjectKnowledge({
+      ...fixture,
+      provider: new IncrementalProvider(createHierarchy(sections)),
+      model: 'test-model',
+      embeddingModel: 'embedding-v1',
+    });
+    const alphaPath = join(fixture.knowledgeRoot, 'alpha.md');
+    const editedMarkdown = readFileSync(alphaPath, 'utf8').replace(
+      'Generated verified summary.',
+      'Manual text changed after the previous embedding sync.',
+    );
+    writeFileSync(alphaPath, editedMarkdown, 'utf8');
+    const provider = new IncrementalProvider(createHierarchy(sections));
+    const prepared = await prepareProjectKnowledgeBuild({
+      ...fixture,
+      provider,
+      model: 'test-model',
+      embeddingModel: 'embedding-v1',
+      incremental: true,
+    });
+
+    expect(prepared.noOp).toBe(true);
+    const result = await executePreparedKnowledgeBuild(prepared, {
+      ...fixture,
+      provider,
+      model: 'test-model',
+      embeddingModel: 'embedding-v1',
+      incremental: true,
+    });
+
+    expect(result.noOp).toBe(true);
+    expect(provider.requests).toHaveLength(0);
+    expect(provider.embeddingCalls).toBeGreaterThan(0);
+    const database = new Database(resolveProjectDatabasePath(fixture.projectRoot), { readonly: true });
+    try {
+      expect(database.prepare('SELECT content_hash FROM documents WHERE id = ?').get('alpha-doc'))
+        .toEqual({ content_hash: createHash('sha256').update(editedMarkdown, 'utf8').digest('hex') });
+    } finally {
+      database.close();
+    }
+    expect(projectEmbeddingsAreCurrent(
+      fixture.projectRoot,
+      fixture.project,
+      provider.id,
+      'embedding-v1',
+    )).toBe(true);
   });
 
   it('keeps outputs for deleted source sections unchanged pending review', async () => {
