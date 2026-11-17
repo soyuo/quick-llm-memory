@@ -51,10 +51,39 @@ export function commitGeneratedDocuments(
   hierarchy: readonly HierarchyNode[],
   sections: readonly SourceSection[],
 ): GeneratedDocumentCommitResult {
-  const validatedHierarchy = assertValidKnowledgeHierarchy(hierarchy, sections);
+  return commitGeneratedDocumentSet(knowledgeRoot, candidates, hierarchy, hierarchy, sections, true);
+}
+
+/** Atomically update only selected generated documents, preserving every other file. */
+export function commitGeneratedDocumentUpdates(
+  knowledgeRoot: string,
+  candidates: readonly GeneratedMarkdownCandidate[],
+  fullHierarchy: readonly HierarchyNode[],
+  selectedHierarchy: readonly HierarchyNode[],
+  sections: readonly SourceSection[],
+): GeneratedDocumentCommitResult {
+  return commitGeneratedDocumentSet(
+    knowledgeRoot,
+    candidates,
+    fullHierarchy,
+    selectedHierarchy,
+    sections,
+    false,
+  );
+}
+
+function commitGeneratedDocumentSet(
+  knowledgeRoot: string,
+  candidates: readonly GeneratedMarkdownCandidate[],
+  fullHierarchy: readonly HierarchyNode[],
+  validationHierarchy: readonly HierarchyNode[],
+  sections: readonly SourceSection[],
+  replaceSet: boolean,
+): GeneratedDocumentCommitResult {
+  const validatedHierarchy = assertValidKnowledgeHierarchy(fullHierarchy, sections);
   const orderedCandidates = assertValidGeneratedDocuments(
     candidates,
-    validatedHierarchy,
+    validationHierarchy,
     sections,
   );
 
@@ -66,7 +95,7 @@ export function commitGeneratedDocuments(
     }
   }
 
-  if (orderedCandidates.length === 0) {
+  if (orderedCandidates.length === 0 && replaceSet) {
     if (!pathExists(knowledgeRoot)) {
       return emptyCommitResult();
     }
@@ -121,10 +150,10 @@ export function commitGeneratedDocuments(
     const updated = orderedCandidates
       .filter((candidate) => existingByPath.has(candidate.path.toLowerCase()))
       .map((candidate) => candidate.path);
-    const removed = existingDocuments
+    const removed = replaceSet ? existingDocuments
       .filter((document) => !candidatePathKeys.has(document.path.toLowerCase()))
       .map((document) => document.path)
-      .sort(comparePaths);
+      .sort(comparePaths) : [];
 
     for (const candidate of orderedCandidates) {
       const targetPath = resolveUnderRoot(root, candidate.path);
@@ -135,9 +164,10 @@ export function commitGeneratedDocuments(
       stagedPaths.push(stagePath);
     }
 
-    const documentsToBackup = [...existingDocuments].sort((left, right) =>
-      comparePaths(left.path, right.path),
-    );
+    const documentsToBackup = (replaceSet
+      ? [...existingDocuments]
+      : existingDocuments.filter((document) => candidatePathKeys.has(document.path.toLowerCase())))
+      .sort((left, right) => comparePaths(left.path, right.path));
     for (const document of documentsToBackup) {
       const originalPath = resolveUnderRoot(root, document.path);
       assertNoSymlinkComponents(root, originalPath);

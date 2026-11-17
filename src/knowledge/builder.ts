@@ -1,13 +1,17 @@
 import { realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  readProjectSourceSnapshot,
+  readProjectSourceSnapshotReadOnly,
   replaceProjectSourceSnapshot,
   type ProjectSourceSnapshot,
 } from '../database/source-snapshot.js';
 import { rebuildProjectIndex, type ProjectIndexRebuildResult } from '../database/reindex.js';
 import { InputError, QLM_ERROR_CODES, QLMError } from '../errors/qlm-error.js';
-import { commitGeneratedDocuments, type GeneratedDocumentCommitResult } from './atomic-commit.js';
+import {
+  commitGeneratedDocumentUpdates,
+  commitGeneratedDocuments,
+  type GeneratedDocumentCommitResult,
+} from './atomic-commit.js';
 import { assertValidGeneratedDocuments } from './generated-document-validator.js';
 import { assertValidKnowledgeHierarchy } from './hierarchy-validator.js';
 import { MarkdownDocumentParser } from './markdown-parser.js';
@@ -78,6 +82,8 @@ export interface BuildProjectKnowledgeOptions {
     preserveCodeBlocks: boolean;
     preserveTables: boolean;
   };
+  /** Generate only the outputs selected by the source impact plan. */
+  incremental?: boolean;
   clock?: () => Date;
   signal?: AbortSignal;
   onProgress?: BuildProgressSink;
@@ -91,6 +97,8 @@ export interface BuildProjectKnowledgeResult {
   candidates: GeneratedMarkdownCandidate[];
   commit: GeneratedDocumentCommitResult;
   index: ProjectIndexRebuildResult;
+  noOp?: boolean;
+  pendingRemovalPaths?: string[];
 }
 
 export interface PreparedKnowledgeBuild {
@@ -100,6 +108,11 @@ export interface PreparedKnowledgeBuild {
   sourceSnapshot: ProjectSourceSnapshot;
   sourceChanges: SourceChangeSet;
   impactPlan: KnowledgeImpactPlan;
+  regenerationPaths: string[];
+  pendingRemovalPaths: string[];
+  selective: boolean;
+  noOp: boolean;
+  pendingOnly: boolean;
 }
 
 interface PlannedDocument {
@@ -168,7 +181,7 @@ export async function prepareProjectKnowledgeBuild(
       sources,
       sections,
     );
-    const previousSnapshot = readProjectSourceSnapshot(
+    const previousSnapshot = readProjectSourceSnapshotReadOnly(
       options.projectRoot,
       options.project,
       sourceSnapshot.sourceRoot,
@@ -180,6 +193,49 @@ export async function prepareProjectKnowledgeBuild(
       join(options.projectRoot, 'knowledge'),
       sourceChanges,
     );
+
+    const selective = options.incremental === true && previousSnapshot !== undefined;
+    const selectedDocuments = selective
+      ? selectIncrementalDocuments(impactPlan, sourceChanges)
+      : impactPlan.documents.filter(({ action }) => action === 'regenerate');
+    const regenerationPaths = selective
+      ? selectedDocuments.map(({ path }) => path)
+      : impactPlan.documents
+          .filter(({ action }) => action === 'regenerate')
+          .map(({ path }) => path);
+    const selectedPathKeys = new Set(regenerationPaths.map((path) => path.toLowerCase()));
+    const hasDeletedSections = sourceChanges.sections.some(({ status }) => status === 'deleted') ||
+      sourceChanges.files.some(({ status }) => status === 'deleted');
+    const pendingRemovalPaths = selective && hasDeletedSections
+      ? impactPlan.documents
+          .filter(({ action, path }) => action === 'regenerate' && !selectedPathKeys.has(path.toLowerCase()))
+          .map(({ path }) => path)
+      : [];
+    const pendingOnly = selective && regenerationPaths.length === 0 && pendingRemovalPaths.length > 0;
+    const noOp = selective && regenerationPaths.length === 0 && pendingRemovalPaths.length === 0;
+
+    if (noOp || pendingOnly) {
+      emit({
+        stage: 'awaiting_approval',
+        message: pendingOnly
+          ? 'Deleted-source outputs are pending review and will remain unchanged.'
+          : 'No generated documents are affected; existing knowledge is unchanged.',
+      });
+      ensureNotCancelled();
+      return {
+        sources,
+        sections,
+        hierarchy: [],
+        sourceSnapshot,
+        sourceChanges,
+        impactPlan,
+        regenerationPaths,
+        pendingRemovalPaths,
+        selective,
+        noOp,
+        pendingOnly,
+      };
+    }
 
     emit({ stage: 'planning' });
     ensureNotCancelled();
@@ -207,7 +263,22 @@ export async function prepareProjectKnowledgeBuild(
     });
     ensureNotCancelled();
 
-    return { sources, sections, hierarchy, sourceSnapshot, sourceChanges, impactPlan };
+    const preparedRegenerationPaths = selective
+      ? regenerationPaths
+      : flattenPlannedDocuments(hierarchy).map(({ node }) => node.path);
+    return {
+      sources,
+      sections,
+      hierarchy,
+      sourceSnapshot,
+      sourceChanges,
+      impactPlan,
+      regenerationPaths: preparedRegenerationPaths,
+      pendingRemovalPaths,
+      selective,
+      noOp,
+      pendingOnly,
+    };
   } catch (error) {
     if (options.signal?.aborted) {
       emit({ stage: 'cancelled' });
@@ -240,8 +311,42 @@ export async function executePreparedKnowledgeBuild(
   try {
     ensureNotCancelled();
     const { sources, sections, hierarchy, sourceSnapshot } = prepared;
-    const plannedDocuments = flattenPlannedDocuments(hierarchy);
-    const allDocumentNodes = plannedDocuments.map(({ node }) => node);
+    if (prepared.noOp || prepared.pendingOnly) {
+      const result: BuildProjectKnowledgeResult = {
+        sources: sources.length,
+        sections: sections.length,
+        categories: 0,
+        documents: 0,
+        candidates: [],
+        commit: { created: [], updated: [], removed: [] },
+        index: { categories: 0, documents: 0, relations: 0 },
+        ...(prepared.noOp ? { noOp: true } : {}),
+        ...(prepared.pendingRemovalPaths.length > 0
+          ? { pendingRemovalPaths: prepared.pendingRemovalPaths }
+          : {}),
+      };
+      emit({
+        stage: 'completed',
+        message: prepared.pendingOnly
+          ? 'Deleted-source outputs remain pending review.'
+          : 'No generated documents changed.',
+      });
+      return result;
+    }
+
+    const allPlannedDocuments = flattenPlannedDocuments(hierarchy);
+    const incremental = prepared.selective;
+    const regenerationPathKeys = new Set(prepared.regenerationPaths.map((path) => path.toLowerCase()));
+    const plannedDocuments = incremental
+      ? allPlannedDocuments.filter(({ node }) => regenerationPathKeys.has(node.path.toLowerCase()))
+      : allPlannedDocuments;
+    if (incremental && plannedDocuments.length !== prepared.regenerationPaths.length) {
+      throw new InputError(
+        'The proposed hierarchy does not contain every document in the confirmed impact plan.',
+        { suggestedAction: 'Review the proposed structure or run a full build.' },
+      );
+    }
+    const allDocumentNodes = allPlannedDocuments.map(({ node }) => node);
     const candidates: GeneratedMarkdownCandidate[] = [];
     emit({ stage: 'generating', completed: 0, total: plannedDocuments.length });
 
@@ -274,30 +379,34 @@ export async function executePreparedKnowledgeBuild(
     ensureNotCancelled();
     emit({ stage: 'verifying' });
     ensureNotCancelled();
-    const validatedCandidates = assertValidGeneratedDocuments(
-      candidates,
-      hierarchy,
-      sections,
-    );
+    const selectedHierarchy = incremental
+      ? selectHierarchyByPaths(hierarchy, regenerationPathKeys)
+      : hierarchy;
+    const validatedCandidates = assertValidGeneratedDocuments(candidates, selectedHierarchy, sections);
     ensureNotCancelled();
 
     emit({ stage: 'committing' });
     ensureNotCancelled();
     canCancel = false;
-    const commit = commitGeneratedDocuments(
-      options.knowledgeRoot,
-      validatedCandidates,
-      hierarchy,
-      sections,
-    );
+    const commit = incremental
+      ? commitGeneratedDocumentUpdates(
+          options.knowledgeRoot,
+          validatedCandidates,
+          hierarchy,
+          selectedHierarchy,
+          sections,
+        )
+      : commitGeneratedDocuments(options.knowledgeRoot, validatedCandidates, hierarchy, sections);
     emit({ stage: 'indexing' });
     const index = rebuildProjectIndex(options.projectRoot, options.project);
-    replaceProjectSourceSnapshot(
-      options.projectRoot,
-      options.project,
-      sourceSnapshot,
-      (options.clock?.() ?? new Date()).toISOString(),
-    );
+    if (prepared.impactPlan.removedSources.length === 0 && prepared.pendingRemovalPaths.length === 0) {
+      replaceProjectSourceSnapshot(
+        options.projectRoot,
+        options.project,
+        sourceSnapshot,
+        (options.clock?.() ?? new Date()).toISOString(),
+      );
+    }
 
     const result = {
       sources: sources.length,
@@ -307,6 +416,9 @@ export async function executePreparedKnowledgeBuild(
       candidates: validatedCandidates,
       commit,
       index,
+      ...(prepared.pendingRemovalPaths.length > 0
+        ? { pendingRemovalPaths: prepared.pendingRemovalPaths }
+        : {}),
     };
     emit({ stage: 'completed' });
     return result;
@@ -318,6 +430,66 @@ export async function executePreparedKnowledgeBuild(
     emit({ stage: 'failed' });
     throw error;
   }
+}
+
+function selectIncrementalDocuments(
+  impactPlan: KnowledgeImpactPlan,
+  sourceChanges: SourceChangeSet,
+): KnowledgeImpactPlan['documents'] {
+  const activeSources = new Set(
+    sourceChanges.files
+      .filter(({ status }) => status === 'added' || status === 'modified')
+      .map(({ sourceId }) => sourceId),
+  );
+  const activeSections = new Set(
+    sourceChanges.sections
+      .filter(({ status }) => status === 'added' || status === 'modified')
+      .map(({ sectionId }) => sectionId),
+  );
+  const selectedIds = new Set<string>();
+  for (const document of impactPlan.documents) {
+    if (document.action !== 'regenerate') continue;
+    if (document.reasons.some((reason) =>
+      (reason.startsWith('source:') && activeSources.has(reason.slice('source:'.length))) ||
+      (reason.startsWith('section:') && activeSections.has(reason.slice('section:'.length)))
+    )) {
+      selectedIds.add(document.id);
+    }
+  }
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const document of impactPlan.documents) {
+      if (document.action !== 'regenerate' || selectedIds.has(document.id)) continue;
+      if (document.reasons.some((reason) =>
+        reason.startsWith('related:') && selectedIds.has(reason.slice('related:'.length))
+      )) {
+        selectedIds.add(document.id);
+        changed = true;
+      }
+    }
+  }
+  return impactPlan.documents.filter(({ id }) => selectedIds.has(id));
+}
+
+function selectHierarchyByPaths(
+  hierarchy: readonly HierarchyNode[],
+  selectedPathKeys: ReadonlySet<string>,
+): HierarchyNode[] {
+  const visit = (nodes: readonly HierarchyNode[]): HierarchyNode[] => {
+    const selected: HierarchyNode[] = [];
+    for (const node of nodes) {
+      if (node.type === 'document') {
+        if (selectedPathKeys.has(node.path.toLowerCase())) selected.push(node);
+        continue;
+      }
+      const children = visit(node.children ?? []);
+      if (children.length > 0) selected.push({ ...node, children });
+    }
+    return selected;
+  };
+  return visit(hierarchy);
 }
 
 function flattenPlannedDocuments(

@@ -223,14 +223,16 @@ export function planProjectKnowledgeImpact(
 }
 
 function matchesChangedSection(document: DocumentInfo, change: SourceSectionChange): boolean {
+  if (change.status === 'added') {
+    return document.sourceIds.has(change.sourceId) ||
+      hasSourceReference(document.sourceSections, change.sourceId);
+  }
   const references = [change.previousParserSectionId, change.currentParserSectionId]
     .filter((reference): reference is string => reference !== null);
   if (references.some((reference) => document.sourceSections.has(reference))) return true;
   const hasLegacySide = change.status === 'deleted'
     ? change.previousParserSectionId === null
-    : change.status === 'added'
-      ? change.currentParserSectionId === null
-      : change.previousParserSectionId === null || change.currentParserSectionId === null;
+    : change.previousParserSectionId === null || change.currentParserSectionId === null;
   return hasLegacySide && (
     document.sourceIds.has(change.sourceId) || hasSourceReference(document.sourceSections, change.sourceId)
   );
