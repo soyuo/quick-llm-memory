@@ -67,6 +67,12 @@ export interface BuildProjectKnowledgeResult {
   index: ProjectIndexRebuildResult;
 }
 
+export interface PreparedKnowledgeBuild {
+  sources: ReturnType<typeof loadMarkdownSources>;
+  sections: SourceSection[];
+  hierarchy: HierarchyNode[];
+}
+
 interface PlannedDocument {
   node: HierarchyNode;
   ancestors: HierarchyNode[];
@@ -76,6 +82,14 @@ interface PlannedDocument {
 export async function buildProjectKnowledge(
   options: BuildProjectKnowledgeOptions,
 ): Promise<BuildProjectKnowledgeResult> {
+  const prepared = await prepareProjectKnowledgeBuild(options);
+  return executePreparedKnowledgeBuild(prepared, options);
+}
+
+/** Parse sources and return a validated hierarchy without generating or writing documents. */
+export async function prepareProjectKnowledgeBuild(
+  options: BuildProjectKnowledgeOptions,
+): Promise<PreparedKnowledgeBuild> {
   const emit = (event: BuildProgressEvent): void => {
     try {
       options.onProgress?.(event);
@@ -83,7 +97,6 @@ export async function buildProjectKnowledge(
       // Progress observers must not change the outcome of a build.
     }
   };
-  let canCancel = true;
   const ensureNotCancelled = (): void => {
     if (options.signal?.aborted) {
       throw new BuildCancelledError(options.signal.reason);
@@ -135,10 +148,43 @@ export async function buildProjectKnowledge(
 
     emit({
       stage: 'awaiting_approval',
-      message: 'No approval gate is configured; continuing with the validated hierarchy.',
+      message: 'Validated hierarchy is ready for review.',
     });
     ensureNotCancelled();
 
+    return { sources, sections, hierarchy };
+  } catch (error) {
+    if (options.signal?.aborted) {
+      emit({ stage: 'cancelled' });
+      throw new BuildCancelledError(options.signal.reason ?? error);
+    }
+    emit({ stage: 'failed' });
+    throw error;
+  }
+}
+
+/** Generate and commit only after the caller has accepted the prepared hierarchy. */
+export async function executePreparedKnowledgeBuild(
+  prepared: PreparedKnowledgeBuild,
+  options: BuildProjectKnowledgeOptions,
+): Promise<BuildProjectKnowledgeResult> {
+  const emit = (event: BuildProgressEvent): void => {
+    try {
+      options.onProgress?.(event);
+    } catch {
+      // Progress observers must not change the outcome of a build.
+    }
+  };
+  let canCancel = true;
+  const ensureNotCancelled = (): void => {
+    if (options.signal?.aborted) {
+      throw new BuildCancelledError(options.signal.reason);
+    }
+  };
+
+  try {
+    ensureNotCancelled();
+    const { sources, sections, hierarchy } = prepared;
     const plannedDocuments = flattenPlannedDocuments(hierarchy);
     const allDocumentNodes = plannedDocuments.map(({ node }) => node);
     const candidates: GeneratedMarkdownCandidate[] = [];

@@ -11,6 +11,7 @@ import {
   BUILD_PROGRESS_STAGES,
   BuildCancelledError,
   buildProjectKnowledge,
+  prepareProjectKnowledgeBuild,
   type BuildProgressStage,
 } from '../src/knowledge/builder.js';
 import type { HierarchyNode } from '../src/knowledge/planner.js';
@@ -128,6 +129,32 @@ describe('qlm build command', () => {
       database.close();
     }
     expect(existsSync(join(knowledgeRoot, 'security', 'authentication.md'))).toBe(false);
+  });
+
+  it('prepares a validated hierarchy without generating documents or touching the project', async () => {
+    const { project, projectRoot, knowledgeRoot } = createProject();
+    const sourcePath = createSourceFile();
+    const source = loadMarkdownSources(sourcePath)[0];
+    if (source === undefined) throw new Error('Expected a source fixture.');
+    const parsed = await new MarkdownDocumentParser().parse(source);
+    const provider = new FakeBuildProvider(createHierarchy(parsed.sections.map(({ id }) => id)));
+    const events: BuildProgressStage[] = [];
+
+    const prepared = await prepareProjectKnowledgeBuild({
+      sourcePath,
+      projectRoot,
+      knowledgeRoot,
+      project,
+      provider,
+      model: 'test-model',
+      onProgress: ({ stage }) => events.push(stage),
+    });
+
+    expect(prepared.hierarchy).toHaveLength(1);
+    expect(events).toEqual(['queued', 'parsing', 'parsing', 'planning', 'validating', 'awaiting_approval']);
+    expect(provider.requests.map(({ schemaName }) => schemaName)).toEqual(['qlm_knowledge_hierarchy']);
+    expect(existsSync(knowledgeRoot)).toBe(false);
+    expect(existsSync(resolveProjectDatabasePath(projectRoot))).toBe(false);
   });
 
   it('reports a typed configuration error when no model is configured', async () => {
