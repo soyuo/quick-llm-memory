@@ -9,6 +9,7 @@ const SAFE_MESSAGES = new Set([
   'Project created',
   'Application error',
   'Project reindexed',
+  'MCP HTTP access',
 ]);
 
 const SENSITIVE_FIELDS = new Set([

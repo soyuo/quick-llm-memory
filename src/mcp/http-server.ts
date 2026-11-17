@@ -10,7 +10,10 @@ import {
   toNodeHandler,
 } from '@modelcontextprotocol/node';
 import { InputError, InternalError } from '../errors/qlm-error.js';
+import { createApplicationLogger } from '../logging/logger.js';
+import { resolveSettingsPaths } from '../config/paths.js';
 import { createMcpServer, mcpRequestSignal, type CreateMcpServerOptions } from './server.js';
+import { HttpRateLimiter } from './rate-limiter.js';
 
 export interface ServeMcpHttpOptions extends CreateMcpServerOptions {
   host?: string;
@@ -24,12 +27,14 @@ export interface ServeMcpHttpOptions extends CreateMcpServerOptions {
   maxRequestBodySize?: number;
   maxConcurrentRequests?: number;
   requestTimeoutMs?: number;
+  maxRequestsPerMinute?: number;
   serverFactory?: (onToolExecutionChange?: (delta: 1 | -1) => void) => ReturnType<typeof createMcpServer>;
 }
 
 const DEFAULT_MAX_REQUEST_BODY_SIZE = 1_048_576;
 const DEFAULT_MAX_CONCURRENT_REQUESTS = 32;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const DEFAULT_MAX_REQUESTS_PER_MINUTE = 60;
 
 export interface McpHttpServerHandle {
   readonly host: string;
@@ -47,6 +52,7 @@ export async function serveMcpHttp(
   const port = options.port ?? 8765;
   const maxRequestBodySize = options.maxRequestBodySize ?? DEFAULT_MAX_REQUEST_BODY_SIZE;
   const maxConcurrentRequests = options.maxConcurrentRequests ?? DEFAULT_MAX_CONCURRENT_REQUESTS;
+  const maxRequestsPerMinute = options.maxRequestsPerMinute ?? DEFAULT_MAX_REQUESTS_PER_MINUTE;
   const requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   if (!Number.isSafeInteger(maxRequestBodySize) || maxRequestBodySize < 1) {
     throw new InputError('MCP HTTP request body limit must be a positive safe integer.');
@@ -90,6 +96,8 @@ export async function serveMcpHttp(
     });
   });
   const handleNodeRequest = toNodeHandler(handler, { maxRequestBodySize });
+  const rateLimiter = new HttpRateLimiter(maxRequestsPerMinute);
+  const logger = createApplicationLogger({ dataRoot: options.dataRoot ?? resolveSettingsPaths().dataRoot, level: 'info' });
   const validateHost = loopback ? localhostHostValidation() : hostHeaderValidation(allowedHosts);
   const validateOrigin = loopback ? localhostOriginValidation() : originValidation(allowedOrigins);
   const expectedTokenHash = bearerToken === undefined
@@ -105,6 +113,17 @@ export async function serveMcpHttp(
   let managedCloseTimer: NodeJS.Timeout | undefined;
   let activeMcpRequests = 0;
   const server = createServer((request, response) => {
+    const started = performance.now();
+    let logged = false;
+    const logAccess = () => {
+      if (logged) return;
+      logged = true;
+      const pathname = (request.url ?? '/').split('?', 1)[0];
+      const route = pathname === '/mcp' || pathname === '/__qlm/manager/status'
+        || pathname === '/__qlm/manager/stop' ? pathname : '/other';
+      logger.info({ method: request.method, route, status: response.statusCode, durationMs: Math.round(performance.now() - started) }, 'MCP HTTP access');
+    };
+    response.once('finish', logAccess);
     if (!validateHost(request, response) || !validateOrigin(request, response)) {
       return;
     }
@@ -148,7 +167,7 @@ export async function serveMcpHttp(
         }, 5_000);
         managedCloseTimer.unref();
         setImmediate(() => {
-          closePromise ??= closeServer(server, handler);
+          closePromise ??= closeServer(server, handler, logger);
           void closePromise.catch(() => {
             process.exitCode = 1;
           }).finally(() => {
@@ -161,6 +180,13 @@ export async function serveMcpHttp(
 
     if (pathname !== '/mcp') {
       response.writeHead(404).end();
+      return;
+    }
+
+    const clientKey = createHash('sha256').update(request.socket.remoteAddress ?? 'unknown').digest('hex');
+    if (!rateLimiter.allow(clientKey)) {
+      response.writeHead(429, { 'content-type': 'application/json; charset=utf-8', 'retry-after': '60' });
+      response.end(JSON.stringify({ error: 'MCP request rate limit exceeded.' }));
       return;
     }
 
@@ -197,7 +223,12 @@ export async function serveMcpHttp(
   server.requestTimeout = requestTimeoutMs;
   server.setTimeout(requestTimeoutMs, (socket) => socket.destroy());
 
-  await listen(server, port, host, handler);
+  try {
+    await listen(server, port, host, handler);
+  } catch (error) {
+    await logger.close();
+    throw error;
+  }
   const address = server.address();
   if (address === null || typeof address === 'string') {
     await handler.close();
@@ -212,7 +243,7 @@ export async function serveMcpHttp(
     ...(startedAt === undefined ? {} : { startedAt }),
     ...(commandIdentity === undefined ? {} : { commandIdentity }),
     close() {
-      closePromise ??= closeServer(server, handler);
+      closePromise ??= closeServer(server, handler, logger);
       return closePromise;
     },
   };
@@ -268,6 +299,7 @@ function listen(
 async function closeServer(
   server: Server,
   handler: ReturnType<typeof createMcpHandler>,
+  logger: ReturnType<typeof createApplicationLogger>,
 ): Promise<void> {
   const results = await Promise.allSettled([
     handler.close(),
@@ -278,6 +310,7 @@ async function closeServer(
       });
     }),
   ]);
+  await logger.close();
   const failure = results.find((result) => result.status === 'rejected');
   if (failure?.status === 'rejected') {
     throw failure.reason;
