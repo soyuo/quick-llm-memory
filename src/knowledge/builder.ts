@@ -1,6 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   readProjectSourceSnapshotReadOnly,
   replaceProjectSourceSnapshot,
@@ -93,6 +93,8 @@ export interface BuildProjectKnowledgeOptions {
   };
   /** Generate only the outputs selected by the source impact plan. */
   incremental?: boolean;
+  /** Disable local response caching when building sensitive source documents. */
+  cacheGeneration?: boolean;
   onDocumentConflicts?: (
     conflicts: readonly GeneratedDocumentConflict[],
   ) => Promise<Readonly<Record<string, DocumentConflictResolution>>>;
@@ -402,6 +404,11 @@ export async function executePreparedKnowledgeBuild(
           ancestors: planned.ancestors,
           relatedDocuments: allDocumentNodes,
           ...(options.documentSettings ?? {}),
+          generationCache: {
+            dataRoot: dirname(dirname(options.projectRoot)),
+            projectId: options.project.id,
+            enabled: options.cacheGeneration ?? true,
+          },
           ...(options.clock === undefined ? {} : { clock: options.clock }),
           ...(options.signal === undefined ? {} : { signal: options.signal }),
         }),

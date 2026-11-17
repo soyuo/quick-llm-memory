@@ -575,6 +575,7 @@ export function TuiApp({
       ) : activeScreen === 'Build' ? (
         <BuildWizard
           dataRoot={root}
+          settingsPaths={resolvedSettingsPaths}
           providerFactory={buildProviderFactory}
           {...(buildMergeEditor === undefined ? {} : { mergeEditor: buildMergeEditor })}
           onBuildComplete={(projectName) => {

@@ -4,6 +4,8 @@ import { extname, join } from 'node:path';
 import { lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
+import { loadSettings } from '../config/settings.js';
+import type { SettingsPaths } from '../config/paths.js';
 import { settingsSchema, type Settings } from '../config/schema.js';
 import {
   BuildCancelledError,
@@ -164,6 +166,7 @@ export function validateBuildWizardStep(
 
 export interface BuildWizardProps {
   dataRoot: string;
+  settingsPaths?: SettingsPaths;
   onCancel: () => void;
   onBuildComplete: (projectName: string) => void;
   providerFactory?: (settings: Settings) => AIProvider;
@@ -172,6 +175,7 @@ export interface BuildWizardProps {
 
 export function BuildWizard({
   dataRoot,
+  settingsPaths,
   onCancel,
   onBuildComplete,
   providerFactory = createConfiguredBuildProvider,
@@ -224,8 +228,12 @@ export function BuildWizard({
       if (project === undefined) {
         throw new Error(`Project not found: ${draft.projectName}. Create it from the Projects screen first.`);
       }
+      const savedSettings = settingsPaths === undefined
+        ? settingsSchema.parse({})
+        : loadSettings({ paths: settingsPaths });
       const settings = settingsSchema.parse({
-        ai: { provider: draft.provider, model: draft.model },
+        ...savedSettings,
+        ai: { ...savedSettings.ai, provider: draft.provider, model: draft.model },
       });
       const provider = providerFactory(settings);
       const projectRoot = join(dataRoot, 'projects', project.name);
@@ -249,6 +257,7 @@ export function BuildWizard({
           preserveTables: draft.preserveTables,
         },
         incremental: true,
+        cacheGeneration: settings.ai?.cache_generation ?? true,
         signal: analysisController.signal,
         onProgress: setProgress,
       };
