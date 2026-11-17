@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3';
 import { ConfigurationError } from '../config/error.js';
 import type { ProjectMetadata } from '../projects/schema.js';
 
-export const PROJECT_DATABASE_SCHEMA_VERSION = 2;
+export const PROJECT_DATABASE_SCHEMA_VERSION = 3;
 
 export function initializeProjectDatabaseSchema(
   database: Database.Database,
@@ -53,7 +53,7 @@ export function initializeProjectDatabaseSchema(
     }
   }
 
-  if (currentVersion < PROJECT_DATABASE_SCHEMA_VERSION) {
+  if (currentVersion < 2) {
     const conflictingFtsObjects = database
       .prepare(`
         SELECT name
@@ -126,6 +126,41 @@ export function initializeProjectDatabaseSchema(
         target_id TEXT NOT NULL,
         relation_type TEXT NOT NULL,
         PRIMARY KEY (source_id, target_id, relation_type)
+      );
+
+      CREATE TABLE IF NOT EXISTS source_snapshots (
+        project_id TEXT NOT NULL,
+        source_root TEXT NOT NULL,
+        snapshot_version INTEGER NOT NULL CHECK (snapshot_version = 1),
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, source_root),
+        FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS source_snapshot_files (
+        project_id TEXT NOT NULL,
+        source_root TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        path TEXT NOT NULL,
+        content_hash TEXT NOT NULL CHECK (
+          length(content_hash) = 64 AND content_hash NOT GLOB '*[^0-9a-f]*'
+        ),
+        PRIMARY KEY (project_id, source_root, source_id),
+        FOREIGN KEY(project_id, source_root)
+          REFERENCES source_snapshots(project_id, source_root) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS source_snapshot_sections (
+        project_id TEXT NOT NULL,
+        source_root TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        section_id TEXT NOT NULL,
+        content_hash TEXT NOT NULL CHECK (
+          length(content_hash) = 64 AND content_hash NOT GLOB '*[^0-9a-f]*'
+        ),
+        PRIMARY KEY (project_id, source_root, section_id),
+        FOREIGN KEY(project_id, source_root, source_id)
+          REFERENCES source_snapshot_files(project_id, source_root, source_id) ON DELETE CASCADE
       );
 
       CREATE VIRTUAL TABLE IF NOT EXISTS document_fts USING fts5(
