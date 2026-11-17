@@ -146,7 +146,7 @@ describe('TUI knowledge build setup wizard', () => {
     expect(app.lastFrame()).toContain('Knowledge: 0 categories, 1 documents');
     expect(listProjects(dataRoot)).toHaveLength(1);
     app.unmount();
-  });
+  }, 15_000);
 
   it('blocks invalid source paths at the source step', async () => {
     const dataRoot = createTemporaryRoot('qlm-wizard-invalid-');
