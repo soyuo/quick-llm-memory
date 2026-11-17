@@ -48,12 +48,17 @@ describe('TUI Settings', () => {
     await flushInkEffects();
     app.stdin.write('\u001b[C');
     await flushInkEffects();
+    app.stdin.write('\u001b[B');
+    await flushInkEffects();
+    app.stdin.write('\u001b[C');
+    await flushInkEffects();
     app.stdin.write('s');
     await waitForFrame(app, 'Settings saved to config.yaml.');
 
     expect(readFileSync(paths.configFile, 'utf8')).toContain('provider: openai-compatible');
     expect(readFileSync(paths.configFile, 'utf8')).toContain('model: quick-model');
     expect(readFileSync(paths.configFile, 'utf8')).toContain('level: debug');
+    expect(readFileSync(paths.configFile, 'utf8')).toContain('cache_generation: false');
 
     app.stdin.write('\u001b');
     await waitForFrame(app, 'Navigation [focus]');
@@ -61,6 +66,7 @@ describe('TUI Settings', () => {
     expect(app.lastFrame()).toContain('AI Provider: openai-compatible');
     expect(app.lastFrame()).toContain('AI Model: quick-model');
     expect(app.lastFrame()).toContain('Logging level: debug');
+    expect(app.lastFrame()).toContain('Generation response cache: Disabled');
   });
 
   it('does not display or rewrite credentials found in existing config', async () => {

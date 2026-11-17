@@ -24,6 +24,7 @@ import { settingsSchema, type Settings } from './schema.js';
 export interface EditableSettingsValues {
   provider: NonNullable<Settings['ai']>['provider'];
   model: string;
+  cacheGeneration: boolean;
   loggingLevel: Settings['logging']['level'];
 }
 
@@ -43,7 +44,11 @@ export function updateSettings(
     });
   }
   const candidate = settingsSchema.parse({
-    ai: { provider: values.provider, ...(model.length > 0 ? { model } : {}) },
+    ai: {
+      provider: values.provider,
+      cache_generation: values.cacheGeneration,
+      ...(model.length > 0 ? { model } : {}),
+    },
     logging: { level: values.loggingLevel },
   });
 
@@ -82,6 +87,7 @@ export function updateSettings(
   const ai: Record<string, unknown> = {
     ...rawAi,
     provider: candidate.ai?.provider ?? 'openai',
+    cache_generation: candidate.ai?.cache_generation ?? true,
   };
   if (model.length > 0) {
     ai.model = model;

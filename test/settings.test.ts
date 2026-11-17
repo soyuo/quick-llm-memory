@@ -89,13 +89,21 @@ describe('loadSettings', () => {
 
     expect(settings.logging.level).toBe('info');
     expect(settings.application).toEqual({ name: 'quick-llm-memory' });
-    expect(settings.ai).toEqual({ provider: 'openai', model: 'test-model' });
+    expect(settings.ai).toEqual({ provider: 'openai', model: 'test-model', cache_generation: true });
   });
 
   it('uses defaults when the config file is missing', () => {
     const settings = loadSettings({ paths: createSettingsPaths() });
 
     expect(settings.logging.level).toBe('info');
+  });
+
+  it('allows generation response caching to be disabled for sensitive source documents', () => {
+    const paths = createSettingsPaths();
+    mkdirSync(paths.configDir, { recursive: true });
+    writeFileSync(paths.configFile, 'ai:\n  cache_generation: false\n');
+
+    expect(loadSettings({ paths }).ai?.cache_generation).toBe(false);
   });
 
   it('returns a typed configuration error for invalid settings', () => {
