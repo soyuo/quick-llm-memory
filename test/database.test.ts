@@ -211,6 +211,32 @@ describe('project SQLite database', () => {
       .toEqual({ name: 'source_snapshots' });
   });
 
+  it('refuses to promote a version 2 database with conflicting snapshot objects', () => {
+    const { projectRoot, project } = createProject();
+    const original = openDatabase(projectRoot, project);
+    original.exec(`
+      DROP TABLE source_snapshot_sections;
+      DROP TABLE source_snapshot_files;
+      DROP TABLE source_snapshots;
+      CREATE TABLE source_snapshots (unexpected TEXT);
+    `);
+    original.pragma('user_version = 2');
+    original.close();
+
+    expect(() => openDatabase(projectRoot, project)).toThrow(
+      'The version 2 project database contains conflicting source snapshot objects; refusing to migrate it.',
+    );
+
+    const unchanged = new Database(resolveProjectDatabasePath(projectRoot));
+    try {
+      expect(unchanged.pragma('user_version', { simple: true })).toBe(2);
+      expect(unchanged.prepare("SELECT sql FROM sqlite_schema WHERE name = 'source_snapshots'").get())
+        .toEqual({ sql: 'CREATE TABLE source_snapshots (unexpected TEXT)' });
+    } finally {
+      unchanged.close();
+    }
+  });
+
   it('refuses conflicting FTS objects without promoting a version 1 database', () => {
     const { projectRoot, project } = createProject();
     const original = openDatabase(projectRoot, project);

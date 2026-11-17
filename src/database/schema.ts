@@ -85,6 +85,28 @@ export function initializeProjectDatabaseSchema(
     }
   }
 
+  if (currentVersion === 2) {
+    const conflictingSnapshotObjects = database
+      .prepare(`
+        SELECT name
+        FROM sqlite_schema
+        WHERE name GLOB 'source_snapshot*'
+        ORDER BY name
+      `)
+      .pluck()
+      .all();
+    if (conflictingSnapshotObjects.length > 0) {
+      throw new ConfigurationError(
+        'The version 2 project database contains conflicting source snapshot objects; refusing to migrate it.',
+        {
+          filePath: database.name,
+          suggestedAction:
+            'Back up the database and inspect its source_snapshot objects before retrying the migration.',
+        },
+      );
+    }
+  }
+
   const migrate = database.transaction(() => {
     database.exec(`
       CREATE TABLE IF NOT EXISTS projects (
