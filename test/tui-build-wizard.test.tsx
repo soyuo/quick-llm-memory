@@ -111,6 +111,8 @@ describe('TUI knowledge build setup wizard', () => {
     await flushInkEffects();
     await waitForFrame(app, '8/12 Structure Preview');
     expect(app.lastFrame()).toContain('notes.md');
+    expect(app.lastFrame()).toContain('[Added] source file: notes.md');
+    expect(app.lastFrame()).toContain('[Added] section: notes.md');
     expect(provider.requests.map(({ schemaName }) => schemaName)).toEqual(['qlm_knowledge_hierarchy']);
     expect(provider.requests[0]?.prompt).toContain('between 1 and 4, inclusive');
     expect(existsSync(join(dataRoot, 'projects', project.name, 'knowledge'))).toBe(false);
