@@ -24,27 +24,29 @@ thresholds.
 
 ## Phase 7 fixture baseline
 
-The Phase 7 fixture contains three labeled Markdown documents. The firewall and
-router documents are relevant to `network`; the firewall document is relevant
-to the synonym query `prevent illicit entry`. The rose-care document is a
-negative example. A local fake embedding provider assigns fixed vectors, so the
-evaluation does not read credentials or access the network.
+The Phase 7 fixture contains four labeled Markdown documents. The firewall,
+router, and inbound-inspection documents are relevant to `network`; the
+firewall and inbound-inspection documents are relevant to the synonym query
+`prevent illicit entry`. The rose-care document is a negative example. A local
+fake embedding provider assigns fixed vectors, so the evaluation does not read
+credentials or access the network.
 
-Baseline for the top two results:
+Baseline for the top three results (full-text has only two matches for `network`):
 
 | Query | Mode | Expected top results | Relevant coverage |
 | --- | --- | --- | --- |
-| `network` | Full-text | `network/router.md`, `network/firewall.md` | 2/2 (100%) |
-| `network` | Semantic | `network/firewall.md`, `network/router.md` | 2/2 (100%) |
-| `network` | Hybrid | `network/firewall.md`, `network/router.md` | 2/2 (100%) |
-| `prevent illicit entry` | Full-text | No match | 0/1 (0%) |
-| `prevent illicit entry` | Semantic | `network/firewall.md` | 1/1 (100%) |
-| `prevent illicit entry` | Hybrid | `network/firewall.md` | 1/1 (100%) |
+| `network` | Full-text | `network/router.md`, `network/firewall.md` (two matches) | 2/3 (67%) |
+| `network` | Semantic | `network/firewall.md`, `security/ingress.md`, `network/router.md` | 3/3 (100%) |
+| `network` | Hybrid | `network/firewall.md`, `network/router.md`, `security/ingress.md` | 3/3 (100%) |
+| `prevent illicit entry` | Full-text | No match | 0/2 (0%) |
+| `prevent illicit entry` | Semantic | `network/firewall.md`, `security/ingress.md` | 2/2 (100%) |
+| `prevent illicit entry` | Hybrid | `network/firewall.md`, `security/ingress.md` | 2/2 (100%) |
 
 The `network` query deliberately gives full-text and semantic search different
-first-ranked documents. Hybrid combines ranked sources through the production
-reciprocal-rank fusion path; the test asserts its stable order and repeats
-semantic and hybrid searches to check determinism. The synonym query confirms
-semantic and hybrid retrieval can find a relevant document when full-text has
-no match. This is a small regression baseline, not an external-model or
-performance benchmark.
+rank positions: full-text prefers the router, while semantic ranks the
+inbound-inspection document between firewall and router. Hybrid combines the
+ranked sources through production reciprocal-rank fusion, producing a distinct
+score gap and the documented order. The test repeats semantic and hybrid
+searches to check determinism. The synonym query confirms semantic and hybrid
+retrieval can find relevant documents when full-text has no match. This is a
+small regression baseline, not an external-model or performance benchmark.
