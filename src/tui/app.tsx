@@ -24,6 +24,7 @@ import { Logs } from './logs.js';
 import { loadTuiDashboardSnapshot } from './dashboard.js';
 import type { Settings } from '../config/schema.js';
 import type { AIProvider } from '../providers/provider.js';
+import type { ManagedHttpServerStatus } from '../mcp/process-manager.js';
 
 export const TUI_SCREENS = [
   'Dashboard',
@@ -73,6 +74,9 @@ export interface TuiAppProps {
   buildProviderFactory?: (settings: Settings) => AIProvider;
   buildMergeEditor?: BuildWizardMergeEditor;
   mcpConnectionCheck?: (signal: AbortSignal) => Promise<string[]>;
+  mcpHttpStatus?: () => Promise<ManagedHttpServerStatus>;
+  mcpHttpStart?: () => Promise<ManagedHttpServerStatus>;
+  mcpHttpStop?: () => Promise<ManagedHttpServerStatus>;
   copyText?: (text: string) => void;
   settingsPaths?: SettingsPaths;
 }
@@ -85,6 +89,9 @@ export function TuiApp({
   buildProviderFactory,
   buildMergeEditor,
   mcpConnectionCheck,
+  mcpHttpStatus,
+  mcpHttpStart,
+  mcpHttpStop,
   copyText,
   settingsPaths,
 }: TuiAppProps): React.JSX.Element {
@@ -611,6 +618,10 @@ export function TuiApp({
         />
       ) : activeScreen === 'MCP Manager' ? (
         <McpManager
+          dataRoot={root}
+          {...(mcpHttpStatus === undefined ? {} : { getHttpStatus: mcpHttpStatus })}
+          {...(mcpHttpStart === undefined ? {} : { startHttpServer: mcpHttpStart })}
+          {...(mcpHttpStop === undefined ? {} : { stopHttpServer: mcpHttpStop })}
           {...(mcpConnectionCheck === undefined ? {} : { probeConnection: mcpConnectionCheck })}
           {...(copyText === undefined ? {} : { copyText })}
           onBack={() => {

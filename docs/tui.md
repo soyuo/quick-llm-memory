@@ -44,6 +44,7 @@ Installing from source builds the small native helper used to publish project tr
 | q (Search) | Quit the TUI; when query is focused, enter `q` in the query |
 | Arrows (MCP Manager) | Select a supported client |
 | c / t (MCP Manager) | Copy config snippet / run bounded stdio check |
+| s / u / x (MCP Manager) | Start managed HTTP / refresh HTTP status / stop verified HTTP process |
 | Tab / Left / Right (Logs) | Change log view |
 | Up / Down (Logs) | Select a log entry |
 | e (Logs) | Open the application log with `VISUAL` or `EDITOR` |
