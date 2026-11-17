@@ -20,10 +20,7 @@ export class HttpRateLimiter {
     }
     let state = this.clients.get(client);
     if (state === undefined) {
-      if (this.clients.size >= this.maxClients) {
-        const oldest = this.clients.keys().next().value as string | undefined;
-        if (oldest !== undefined) this.clients.delete(oldest);
-      }
+      if (this.clients.size >= this.maxClients) return false;
       state = { windowStartedAt: now, count: 0 };
       this.clients.set(client, state);
     }

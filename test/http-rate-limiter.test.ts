@@ -11,6 +11,8 @@ describe('HTTP rate limiter', () => {
     expect(limiter.allow('b')).toBe(true);
     expect(limiter.allow('c')).toBe(true);
     expect(limiter.size).toBeLessThanOrEqual(2);
+    expect(limiter.allow('unseen')).toBe(false);
+    expect(limiter.allow('a')).toBe(false);
     now = 1_000;
     expect(limiter.allow('a')).toBe(true);
   });
