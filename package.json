@@ -11,7 +11,7 @@
     "build": "tsup",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:retrieval-quality": "vitest run test/retrieval-quality.test.ts",
+    "test:retrieval-quality": "vitest run test/retrieval-quality.test.ts test/retrieval-quality-phase7.test.ts",
     "verify:mcp": "npm run build && node scripts/verify-mcp.mjs",
     "install": "node-gyp rebuild"
   },
