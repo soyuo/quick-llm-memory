@@ -37,7 +37,7 @@ Installing from source builds the small native helper used to publish project tr
 | Tab / Enter (Search) | Focus fields; search or open the selected result |
 | Arrows (Search mode/project) | Change retrieval mode or project scope |
 | Up / Down (Search results) | Select a ranked result |
-| q (Search) | Quit the TUI |
+| q (Search) | Quit the TUI; when query is focused, enter `q` in the query |
 | Tab (Build wizard) | Move between setting fields |
 | Arrow keys (Build wizard choices) | Change the provider or toggle boolean settings |
 | Space (Build wizard toggles) | Toggle boolean settings |

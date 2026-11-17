@@ -59,6 +59,15 @@ describe('TUI project search', () => {
     expect(app.lastFrame()).toContain('needle matches this body.');
     app.stdin.write('\u001b');
     await waitForFrame(app.lastFrame, 'Results [focus]');
+    app.stdin.write('\t');
+    await flushInkEffects();
+    app.stdin.write('\t');
+    await flushInkEffects();
+    app.stdin.write('\u001b[C');
+    await flushInkEffects();
+    expect(app.lastFrame()).toContain('Mode [focus]: path | Project: alpha');
+    expect(app.lastFrame()).toContain('Mode changed. Press Enter to search again.');
+    expect(app.lastFrame()).not.toContain('Results [focus]');
     app.unmount();
   });
 

@@ -188,10 +188,12 @@ export function Search({
     if (focus === 'mode') {
       if (key.leftArrow || key.upArrow || key.rightArrow || key.downArrow) {
         const offset = key.leftArrow || key.upArrow ? -1 : 1;
-        setMode((value) => {
-          const index = SEARCH_MODES.indexOf(value);
-          return SEARCH_MODES[(index + offset + SEARCH_MODES.length) % SEARCH_MODES.length]!;
-        });
+        const index = SEARCH_MODES.indexOf(mode);
+        const nextMode = SEARCH_MODES[(index + offset + SEARCH_MODES.length) % SEARCH_MODES.length]!;
+        setMode(nextMode);
+        setResults([]);
+        setResultCursor(0);
+        setMessage('Mode changed. Press Enter to search again.');
         return;
       }
       if (key.return) {
@@ -281,7 +283,7 @@ export function Search({
         </>
       )}
       {message && results.length > 0 ? <Text>{message}</Text> : null}
-      <Text dimColor>Tab focus query/mode/project/results; arrows edit selection; Enter search/open; Esc back; q quit.</Text>
+      <Text dimColor>Tab focus query/mode/project/results; arrows edit selection; Enter search/open; Esc back; q quits outside query.</Text>
     </Box>
   );
 }
