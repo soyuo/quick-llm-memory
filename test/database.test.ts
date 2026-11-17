@@ -55,7 +55,16 @@ describe('project SQLite database', () => {
         )
         .pluck()
         .all(),
-    ).toEqual(['categories', 'document_fts', 'document_relations', 'documents', 'projects']);
+    ).toEqual([
+      'categories',
+      'document_fts',
+      'document_relations',
+      'documents',
+      'projects',
+      'source_snapshot_files',
+      'source_snapshot_sections',
+      'source_snapshots',
+    ]);
     expect(
       database.prepare('SELECT id, name, root_path FROM projects').get(),
     ).toEqual({
@@ -170,6 +179,36 @@ describe('project SQLite database', () => {
     expect(
       migrated.prepare("SELECT sql FROM sqlite_schema WHERE name = 'document_fts'").get(),
     ).toMatchObject({ sql: expect.stringMatching(/USING fts5/i) });
+  });
+
+  it('migrates a version 2 database to the source snapshot schema without changing documents', () => {
+    const { projectRoot, project } = createProject();
+    const original = openDatabase(projectRoot, project);
+    original.prepare(`
+      INSERT INTO documents (
+        id, project_id, path, title, category_id, depth, content_hash,
+        status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'existing-doc', project.id, 'notes.md', 'Notes', null, 1,
+      'hash', 'verified', project.created_at, project.updated_at,
+    );
+    original.exec(`
+      DROP TABLE source_snapshot_sections;
+      DROP TABLE source_snapshot_files;
+      DROP TABLE source_snapshots;
+    `);
+    original.pragma('user_version = 2');
+    original.close();
+
+    const migrated = openDatabase(projectRoot, project);
+    expect(migrated.pragma('user_version', { simple: true })).toBe(3);
+    expect(migrated.prepare('SELECT id, path FROM documents').get()).toEqual({
+      id: 'existing-doc',
+      path: 'notes.md',
+    });
+    expect(migrated.prepare("SELECT name FROM sqlite_schema WHERE name = 'source_snapshots'").get())
+      .toEqual({ name: 'source_snapshots' });
   });
 
   it('refuses conflicting FTS objects without promoting a version 1 database', () => {
