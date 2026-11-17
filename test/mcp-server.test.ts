@@ -10,10 +10,12 @@ import {
   StreamableHTTPClientTransport,
 } from '@modelcontextprotocol/client';
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
+import { McpServer } from '@modelcontextprotocol/server';
+import { z } from 'zod';
 import { describe, expect, it, vi } from 'vitest';
 import { runCli } from '../src/cli.js';
 import { serveMcpHttp } from '../src/mcp/http-server.js';
-import { serveMcpStdio } from '../src/mcp/server.js';
+import { mcpRequestSignal, serveMcpStdio } from '../src/mcp/server.js';
 import { initializeProject } from '../src/projects/manager.js';
 
 describe('MCP server bootstrap', () => {
@@ -51,6 +53,165 @@ describe('MCP server bootstrap', () => {
       expect(missing.status).toBe(404);
     } finally {
       await client.close().catch(() => {});
+      await server.close();
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts a body at the configured limit and rejects one byte above it', async () => {
+    const dataRoot = mkdtempSync(join(tmpdir(), 'qlm-mcp-body-limit-'));
+    const server = await serveMcpHttp({
+      host: '127.0.0.1', port: 0, dataRoot, maxRequestBodySize: 64,
+    });
+    try {
+      const response = await new Promise<{ statusCode: number | undefined; body: string }>((resolve, reject) => {
+        const request = httpRequest(server.url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'content-length': '65' },
+        }, (incoming) => {
+          let body = '';
+          incoming.setEncoding('utf8');
+          incoming.on('data', (chunk: string) => { body += chunk; });
+          incoming.on('end', () => resolve({ statusCode: incoming.statusCode, body }));
+        });
+        request.on('error', reject);
+        request.end('x'.repeat(65));
+      });
+      expect(response.statusCode).toBe(413);
+      const boundaryBody = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' });
+      const atLimit = await new Promise<number | undefined>((resolve, reject) => {
+        const request = httpRequest(server.url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'content-length': '64' },
+        }, (incoming) => {
+          incoming.resume();
+          incoming.on('end', () => resolve(incoming.statusCode));
+        });
+        request.on('error', reject);
+        request.end(boundaryBody.padEnd(64, ' '));
+      });
+      expect(atLimit).not.toBe(413);
+    } finally {
+      await server.close();
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects new HTTP work when the in-flight MCP request limit is full', async () => {
+    const dataRoot = mkdtempSync(join(tmpdir(), 'qlm-mcp-concurrency-limit-'));
+    const server = await serveMcpHttp({
+      host: '127.0.0.1', port: 0, dataRoot, maxConcurrentRequests: 1,
+    });
+    const stalled = httpRequest(server.url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': '100' },
+    });
+    stalled.on('error', () => {});
+    try {
+      await new Promise<void>((resolve, reject) => stalled.write('{', (error) => {
+        if (error) reject(error);
+        else resolve();
+      }));
+      const saturated = await fetch(server.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      expect(saturated.status).toBe(503);
+    } finally {
+      stalled.destroy();
+      await server.close();
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('times out stalled request bodies and continues serving MCP requests', async () => {
+    const dataRoot = mkdtempSync(join(tmpdir(), 'qlm-mcp-request-timeout-'));
+    const server = await serveMcpHttp({
+      host: '127.0.0.1', port: 0, dataRoot, requestTimeoutMs: 100,
+    });
+    try {
+      const timeoutStatus = await new Promise<number | undefined>((resolve, reject) => {
+        const request = httpRequest(server.url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'content-length': '100' },
+        }, (response) => {
+          response.resume();
+          response.once('end', () => resolve(response.statusCode));
+        });
+        request.once('error', (error) => {
+          if ((error as NodeJS.ErrnoException).code === 'ECONNRESET') resolve(undefined);
+          else reject(error);
+        });
+        request.write('{');
+      });
+      expect(timeoutStatus).toBe(504);
+      const transport = new StreamableHTTPClientTransport(new URL(server.url));
+      const client = new Client({ name: 'qlm-timeout-recovery', version: '1.0.0' });
+      try {
+        await client.connect(transport);
+        await expect(client.ping()).resolves.toBeDefined();
+      } finally {
+        await client.close();
+      }
+    } finally {
+      await server.close();
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps timed-out handler work within capacity until it settles', async () => {
+    const dataRoot = mkdtempSync(join(tmpdir(), 'qlm-mcp-handler-timeout-'));
+    let markStarted!: () => void;
+    let toolCalls = 0;
+    let abortObserved = false;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const server = await serveMcpHttp({
+      host: '127.0.0.1', port: 0, dataRoot, requestTimeoutMs: 500, maxConcurrentRequests: 1,
+      serverFactory: (onToolExecutionChange) => {
+        const mcp = new McpServer({ name: 'timeout-test', version: '1.0.0' });
+        mcp.registerTool('wait_for_abort', {
+          description: 'Wait longer than the HTTP response timeout.',
+          inputSchema: {},
+        }, async (_args) => {
+          onToolExecutionChange?.(1);
+          toolCalls += 1;
+          markStarted();
+          try {
+            if (toolCalls > 1) return { content: [{ type: 'text', text: 'recovered' }] };
+            await new Promise<void>((resolve, reject) => {
+              const signal = mcpRequestSignal.getStore();
+              if (signal?.aborted) return resolve();
+              const timer = setTimeout(resolve, 5_000);
+              signal?.addEventListener('abort', () => {
+                abortObserved = true;
+                clearTimeout(timer);
+                resolve();
+              }, { once: true });
+            });
+          } finally {
+            onToolExecutionChange?.(-1);
+          }
+          return { content: [{ type: 'text', text: 'finished' }] };
+        });
+        return mcp;
+      },
+    });
+    const transport = new StreamableHTTPClientTransport(new URL(server.url));
+    const client = new Client({ name: 'qlm-timeout-client', version: '1.0.0' });
+    try {
+      await client.connect(transport);
+      const slowCall = client.callTool({ name: 'wait_for_abort', arguments: {} });
+      await started;
+      await Promise.allSettled([slowCall]);
+      expect(abortObserved).toBe(true);
+      await expect(client.callTool({ name: 'wait_for_abort', arguments: {} })).resolves.toMatchObject({
+        content: [{ text: 'recovered' }],
+      });
+      expect(toolCalls).toBe(2);
+      await expect(client.ping()).resolves.toBeDefined();
+    } finally {
+      await client.close();
       await server.close();
       rmSync(dataRoot, { recursive: true, force: true });
     }
@@ -168,6 +329,8 @@ describe('MCP server bootstrap', () => {
       .rejects.toThrow('at least 32 characters');
     await expect(serveMcpHttp({ host: '127.0.0.1', port: 65_536 }))
       .rejects.toThrow('Invalid MCP HTTP port');
+    await expect(serveMcpHttp({ host: '127.0.0.1', port: 0, requestTimeoutMs: 2_147_483_648 }))
+      .rejects.toThrow('no greater than 2147483647');
   });
 
   it('enforces remote Host and Origin allowlists before MCP dispatch', async () => {
