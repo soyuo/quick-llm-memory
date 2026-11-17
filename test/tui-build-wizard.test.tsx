@@ -52,6 +52,18 @@ describe('TUI knowledge build setup wizard', () => {
     const source = loadMarkdownSources(sourceFile)[0];
     if (source === undefined) throw new Error('Expected a Markdown source fixture.');
     const parsed = await new MarkdownDocumentParser().parse(source);
+    const projectRoot = join(dataRoot, 'projects', project.name);
+    const knowledgeRoot = join(projectRoot, 'knowledge');
+    mkdirSync(join(knowledgeRoot, 'security'), { recursive: true });
+    const existingDocumentPath = join(knowledgeRoot, 'security', 'related.md');
+    const existingDocumentMarkdown = trackedDocument('related', 'Related', source.id, parsed.sections[0]?.id ?? 'section');
+    writeFileSync(existingDocumentPath, existingDocumentMarkdown);
+    writeFileSync(join(knowledgeRoot, 'security', 'index.md'), categoryIndex('security', 'Security'));
+    const unrelatedDocumentPath = join(knowledgeRoot, 'unrelated.md');
+    writeFileSync(unrelatedDocumentPath, existingDocument('unrelated', 'Unrelated'));
+    rebuildProjectIndex(projectRoot, project);
+    const databasePath = resolveProjectDatabasePath(projectRoot);
+    const originalDatabase = readFileSync(databasePath);
     const provider = new FakeWizardProvider([{
       id: 'notes', name: 'Notes', type: 'document', path: 'notes.md',
       description: 'Source notes.', sourceSectionIds: parsed.sections.map(({ id }) => id),
@@ -110,13 +122,18 @@ describe('TUI knowledge build setup wizard', () => {
     app.stdin.write('\r');
     await flushInkEffects();
     await waitForFrame(app, '8/12 Structure Preview');
+    const previewFrame = (app.lastFrame() ?? '').replace(/\s+/gu, ' ');
     expect(app.lastFrame()).toContain('notes.md');
     expect(app.lastFrame()).toContain('[Added] source file: notes.md');
     expect(app.lastFrame()).toContain('[Added] section: notes.md');
+    expect(previewFrame).toContain('Impact plan: 1 document(s) to regenerate, 1 unaffected, 1 parent index(es), 0 removed source(s) for review.');
+    expect(app.lastFrame()).toContain('[Regenerate] security/related.md');
+    expect(app.lastFrame()).toContain('[Update index] security/index.md');
     expect(provider.requests.map(({ schemaName }) => schemaName)).toEqual(['qlm_knowledge_hierarchy']);
     expect(provider.requests[0]?.prompt).toContain('between 1 and 4, inclusive');
-    expect(existsSync(join(dataRoot, 'projects', project.name, 'knowledge'))).toBe(false);
-    expect(existsSync(resolveProjectDatabasePath(join(dataRoot, 'projects', project.name)))).toBe(false);
+    expect(readFileSync(existingDocumentPath, 'utf8')).toBe(existingDocumentMarkdown);
+    expect(readFileSync(unrelatedDocumentPath, 'utf8')).toBe(existingDocument('unrelated', 'Unrelated'));
+    expect(readFileSync(databasePath)).toEqual(originalDatabase);
 
     app.stdin.write('\r');
     await flushInkEffects();
@@ -125,7 +142,8 @@ describe('TUI knowledge build setup wizard', () => {
     await waitForFrame(app, '8/12 Structure Preview');
     expect(app.lastFrame()).toContain('8/12 Structure Preview');
     expect(provider.requests).toHaveLength(1);
-    expect(existsSync(join(dataRoot, 'projects', project.name, 'knowledge'))).toBe(false);
+    expect(readFileSync(existingDocumentPath, 'utf8')).toBe(existingDocumentMarkdown);
+    expect(readFileSync(databasePath)).toEqual(originalDatabase);
 
     app.stdin.write('\r');
     await flushInkEffects();
@@ -145,7 +163,7 @@ describe('TUI knowledge build setup wizard', () => {
     app.stdin.write('\r');
     await flushInkEffects();
     expect(app.lastFrame()).toContain('Selected project: quick-llm');
-    expect(app.lastFrame()).toContain('Knowledge: 0 categories, 1 documents');
+    expect(app.lastFrame()).toContain('Knowledge: 1 categories, 1 documents');
     expect(listProjects(dataRoot)).toHaveLength(1);
     app.unmount();
   }, 15_000);
@@ -267,6 +285,41 @@ function existingDocument(id: string, title: string): string {
     `# ${title}`,
     '',
     'Existing verified content.',
+    '',
+  ].join('\n');
+}
+
+function trackedDocument(id: string, title: string, sourceId: string, sectionId: string): string {
+  return [
+    '---',
+    'schema_version: 1',
+    `id: ${id}`,
+    `title: ${title}`,
+    'type: document',
+    'depth: 2',
+    'status: draft',
+    `source_ids: [${sourceId}]`,
+    `source_sections: [${sourceId}:${sectionId}]`,
+    'related: []',
+    '---',
+    '',
+    `# ${title}`,
+    '',
+    'Existing tracked content.',
+    '',
+  ].join('\n');
+}
+
+function categoryIndex(id: string, title: string): string {
+  return [
+    '---',
+    `id: ${id}`,
+    `title: ${title}`,
+    'type: category-index',
+    'depth: 1',
+    '---',
+    '',
+    `# ${title}`,
     '',
   ].join('\n');
 }

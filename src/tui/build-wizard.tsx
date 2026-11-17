@@ -462,12 +462,19 @@ function HierarchyPreview({ prepared }: { prepared: PreparedKnowledgeBuild | und
       text: `[${capitalize(change.status)}] section: ${change.sourcePath} (${change.sectionId})`,
     })),
   ];
+  const impact = prepared?.impactPlan;
+  const affectedDocuments = impact?.documents.filter(({ action }) => action === 'regenerate') ?? [];
+  const unaffectedCount = (impact?.documents.length ?? 0) - affectedDocuments.length;
   return (
     <Box flexDirection="column">
       <Text>{prepared?.sources.length ?? 0} source(s), {prepared?.sections.length ?? 0} section(s); source changes:</Text>
       {changes.map((change) => <Text key={change.key}>{change.text}</Text>)}
       <Text>Proposed structure:</Text>
       {lines.length === 0 ? <Text>(no documents)</Text> : lines.map((line) => <Text key={line.key}>{line.text}</Text>)}
+      <Text>Impact plan: {affectedDocuments.length} document(s) to regenerate, {unaffectedCount} unaffected, {impact?.categoryIndexes.length ?? 0} parent index(es), {impact?.removedSources.length ?? 0} removed source(s) for review.</Text>
+      {affectedDocuments.map((document) => <Text key={`impact:${document.id}`}>[Regenerate] {document.path} ({document.reasons.join(', ')})</Text>)}
+      {impact?.categoryIndexes.map((category) => <Text key={`impact-index:${category.path}`}>[Update index] {category.path}</Text>)}
+      {impact?.removedSources.map((source) => <Text key={`removed-source:${source.sourceId}`}>[Review removed source] {source.path} ({source.documentIds.length} linked document(s))</Text>)}
     </Box>
   );
 }
