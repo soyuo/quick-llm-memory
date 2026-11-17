@@ -14,7 +14,7 @@ import {
   type ApplicationLogger,
 } from '../logging/logger.js';
 import { validateInternalLinks } from '../markdown/link-validator.js';
-import { OpenAICompatibleProvider } from '../providers/openai-compatible-provider.js';
+import { createConfiguredBuildProvider } from '../providers/configured-build-provider.js';
 import type { AIProvider } from '../providers/provider.js';
 import { searchMarkdownDocuments } from '../markdown/search.js';
 import {
@@ -451,25 +451,6 @@ function createProjectRuntime(): ProjectCommandRuntime {
   });
 
   return { dataRoot: paths.dataRoot, logger, settings };
-}
-
-function createConfiguredBuildProvider(settings: Settings): AIProvider {
-  const providerName = settings.ai?.provider ?? 'openai';
-  if (providerName !== 'openai' && providerName !== 'openai-compatible') {
-    throw new ConfigurationError(`Unsupported AI provider for knowledge builds: ${providerName}.`, {
-      suggestedAction: 'Set ai.provider to openai in config.yaml for this build command.',
-    });
-  }
-
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (apiKey === undefined || apiKey.trim().length === 0) {
-    throw new ConfigurationError('The OPENAI_API_KEY environment variable is required.', {
-      suggestedAction: 'Set OPENAI_API_KEY in the environment; the key is not stored in config.yaml.',
-    });
-  }
-
-  const baseUrl = process.env.OPENAI_BASE_URL?.trim() || 'https://api.openai.com/v1';
-  return new OpenAICompatibleProvider({ baseUrl, apiKey });
 }
 
 async function withProjectRuntime(

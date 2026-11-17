@@ -17,6 +17,8 @@ import {
 } from '../projects/transfer.js';
 import { BuildWizard } from './build-wizard.js';
 import { loadTuiDashboardSnapshot } from './dashboard.js';
+import type { Settings } from '../config/schema.js';
+import type { AIProvider } from '../providers/provider.js';
 
 export const TUI_SCREENS = [
   'Dashboard',
@@ -63,9 +65,10 @@ export interface TuiAppProps {
   rows?: number;
   dataRoot?: string;
   onExit?: () => void;
+  buildProviderFactory?: (settings: Settings) => AIProvider;
 }
 
-export function TuiApp({ columns, rows, dataRoot, onExit }: TuiAppProps): React.JSX.Element {
+export function TuiApp({ columns, rows, dataRoot, onExit, buildProviderFactory }: TuiAppProps): React.JSX.Element {
   const windowSize = useWindowSize();
   const size = {
     columns: columns ?? windowSize.columns ?? 80,
@@ -527,10 +530,18 @@ export function TuiApp({ columns, rows, dataRoot, onExit }: TuiAppProps): React.
           <Text>Arrows choose; Enter selects; c create; n rename; a archive/restore; d delete; i import; e export.</Text>
         </>
       ) : activeScreen === 'Build' ? (
-        <BuildWizard onCancel={() => {
-          setActiveScreen(undefined);
-          setFocusedPane('navigation');
-        }} />
+        <BuildWizard
+          dataRoot={root}
+          providerFactory={buildProviderFactory}
+          onBuildComplete={(projectName) => {
+            setSelectedProjectName(projectName);
+            setRefreshVersion((version) => version + 1);
+          }}
+          onCancel={() => {
+            setActiveScreen(undefined);
+            setFocusedPane('navigation');
+          }}
+        />
       ) : (
         <Text>{activeScreen} screen is not available yet.</Text>
       )}
