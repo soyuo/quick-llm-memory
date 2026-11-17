@@ -15,6 +15,7 @@ import {
   type ProjectTransferOperation,
   type ProjectTransferProgress,
 } from '../projects/transfer.js';
+import { BuildWizard } from './build-wizard.js';
 import { loadTuiDashboardSnapshot } from './dashboard.js';
 
 export const TUI_SCREENS = [
@@ -144,6 +145,10 @@ export function TuiApp({ columns, rows, dataRoot, onExit }: TuiAppProps): React.
   };
 
   useInput((input, key) => {
+    if (activeScreen === 'Build') {
+      return;
+    }
+
     if (activeScreen === 'Projects' && projectAction.kind !== 'idle') {
       if (key.tab) {
         return;
@@ -521,6 +526,11 @@ export function TuiApp({ columns, rows, dataRoot, onExit }: TuiAppProps): React.
           {projectMessage ? <Text>{projectMessage}</Text> : null}
           <Text>Arrows choose; Enter selects; c create; n rename; a archive/restore; d delete; i import; e export.</Text>
         </>
+      ) : activeScreen === 'Build' ? (
+        <BuildWizard onCancel={() => {
+          setActiveScreen(undefined);
+          setFocusedPane('navigation');
+        }} />
       ) : (
         <Text>{activeScreen} screen is not available yet.</Text>
       )}
