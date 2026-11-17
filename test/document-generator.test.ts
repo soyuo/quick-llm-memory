@@ -6,6 +6,8 @@ import { parse } from 'yaml';
 import { InputError } from '../src/errors/qlm-error.js';
 import {
   generateMarkdownDocument,
+  hashGeneratedDocumentContent,
+  updateGeneratedDocumentBaseline,
   GENERATED_DOCUMENT_CONTENT_SCHEMA,
   type GeneratedDocumentContent,
 } from '../src/knowledge/document-generator.js';
@@ -118,6 +120,10 @@ describe('Markdown document generation', () => {
     });
 
     expect(documentFrontmatterSchema.safeParse(candidate.frontmatter).success).toBe(true);
+    expect(documentFrontmatterSchema.safeParse({
+      ...candidate.frontmatter,
+      generation: { ...candidate.frontmatter.generation, baseline_hash: 'not-a-hash' },
+    }).success).toBe(false);
     expect(candidate).toMatchObject({
       documentId: documentNode.id,
       path: documentNode.path,
@@ -132,7 +138,7 @@ describe('Markdown document generation', () => {
         source_ids: ['source-spec'],
         source_sections: ['source-spec:section-auth'],
         related: ['security-authorization'],
-        generation: { provider: 'fake-provider', model: 'test-model', revision: 1 },
+        generation: { provider: 'fake-provider', model: 'test-model', revision: 1, baseline_hash: expect.stringMatching(/^[0-9a-f]{64}$/u) },
       },
     });
     expect(candidate.markdown).toContain('# Authentication');
@@ -146,10 +152,30 @@ describe('Markdown document generation', () => {
       '- `security-authorization`: Authorization (`security/authorization.md`)',
     );
     expect(candidate.markdown).toContain('## Inferences\n- **Inference:** This may support service-to-service integrations.');
+    expect(candidate.frontmatter.generation?.baseline_hash).toBe(hashGeneratedDocumentContent(candidate.markdown));
+    expect(hashGeneratedDocumentContent(candidate.markdown.replace('API keys authenticate callers.', 'Edited by user.')))
+      .not.toBe(candidate.frontmatter.generation?.baseline_hash);
     expect(parse(candidate.markdown.split('---')[1] ?? '')).toMatchObject({
       schema_version: 1,
       id: documentNode.id,
     });
+  });
+
+  it('updates a merged document baseline without including the baseline field in its own hash', async () => {
+    const candidate = await generateMarkdownDocument({
+      provider: new FakeProvider(),
+      model: 'test-model',
+      node: documentNode,
+      sourceSections: [assignedSection],
+      ancestors: [ancestor],
+      relatedDocuments: [relatedDocument],
+    });
+    const merged = candidate.markdown.replace('API keys authenticate callers.', 'Merged content.');
+    const updated = updateGeneratedDocumentBaseline(merged);
+    expect(hashGeneratedDocumentContent(updated)).toBe(
+      documentFrontmatterSchema.parse(parse(updated.split('---')[1] ?? '')).generation?.baseline_hash,
+    );
+    expect(updated).toContain('Merged content.');
   });
 
   it('sends only assigned source sections and the supplied hierarchy context', async () => {
