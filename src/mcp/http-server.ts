@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import { isIP, type AddressInfo } from 'node:net';
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import {
   hostHeaderValidation,
@@ -20,6 +20,7 @@ export interface ServeMcpHttpOptions extends CreateMcpServerOptions {
   confirmRemoteExposure?: boolean;
   allowedHosts?: string[];
   allowedOrigins?: string[];
+  bearerToken?: string;
 }
 
 export interface McpHttpServerHandle {
@@ -37,11 +38,18 @@ export async function serveMcpHttp(
   const host = options.host ?? '127.0.0.1';
   const port = options.port ?? 8765;
   const loopback = isLoopbackHost(host);
+  const bearerToken = options.bearerToken;
+  if (bearerToken !== undefined && (bearerToken.length < 32 || bearerToken.trim() !== bearerToken)) {
+    throw new InputError('MCP HTTP bearer token must be at least 32 characters and contain no surrounding whitespace.');
+  }
   if (!loopback && (!options.allowRemote || !options.confirmRemoteExposure)) {
     throw new InputError('Remote MCP HTTP binding requires --allow-remote and --confirm-remote-exposure.');
   }
   if (!loopback && (!options.allowedHosts?.length || !options.allowedOrigins?.length)) {
     throw new InputError('Remote MCP HTTP binding requires explicit allowed Host and Origin lists.');
+  }
+  if (!loopback && bearerToken === undefined) {
+    throw new InputError('Remote MCP HTTP binding requires QLM_MCP_HTTP_BEARER_TOKEN.');
   }
   const allowedHosts = normalizeAllowlist(options.allowedHosts ?? [], 'Host');
   const allowedOrigins = normalizeAllowlist(options.allowedOrigins ?? [], 'Origin');
@@ -55,6 +63,9 @@ export async function serveMcpHttp(
   const handleNodeRequest = toNodeHandler(handler);
   const validateHost = loopback ? localhostHostValidation() : hostHeaderValidation(allowedHosts);
   const validateOrigin = loopback ? localhostOriginValidation() : originValidation(allowedOrigins);
+  const expectedTokenHash = bearerToken === undefined
+    ? undefined
+    : createHash('sha256').update(bearerToken).digest();
   const startedAt = options.managedInstanceId === undefined
     ? undefined
     : new Date().toISOString();
@@ -69,6 +80,17 @@ export async function serveMcpHttp(
     }
 
     const pathname = (request.url ?? '/').split('?', 1)[0];
+    if (pathname === '/mcp' && expectedTokenHash !== undefined) {
+      const authorization = request.headers.authorization ?? '';
+      const match = /^Bearer (\S+)$/i.exec(authorization);
+      const providedHash = createHash('sha256').update(match?.[1] ?? '').digest();
+      if (match === null || !timingSafeEqual(providedHash, expectedTokenHash)) {
+        response.writeHead(401, { 'content-type': 'application/json', 'www-authenticate': 'Bearer' });
+        response.end(JSON.stringify({ error: 'Unauthorized' }));
+        return;
+      }
+    }
+
     if (options.managedInstanceId !== undefined && startedAt !== undefined && commandIdentity !== undefined
       && request.headers['x-qlm-instance-id'] === options.managedInstanceId) {
       if (pathname === '/__qlm/manager/status' && request.method === 'GET') {

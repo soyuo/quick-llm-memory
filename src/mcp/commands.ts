@@ -14,7 +14,7 @@ import type { ServeMcpHttpOptions } from './http-server.js';
 
 export interface McpCommandOptions {
   serveStdio?: () => StdioServerHandle | Promise<StdioServerHandle>;
-  serveHttp?: (options: Pick<ServeMcpHttpOptions, 'host' | 'port' | 'managedInstanceId' | 'allowRemote' | 'confirmRemoteExposure' | 'allowedHosts' | 'allowedOrigins'>) =>
+  serveHttp?: (options: Pick<ServeMcpHttpOptions, 'host' | 'port' | 'managedInstanceId' | 'allowRemote' | 'confirmRemoteExposure' | 'allowedHosts' | 'allowedOrigins' | 'bearerToken'>) =>
     McpHttpServerHandle | Promise<McpHttpServerHandle>;
   registerHttpShutdown?: (handler: () => Promise<void>) => () => void;
   stdioServerConfig?: McpStdioServerConfig;
@@ -82,6 +82,9 @@ export function registerMcpCommands(
           confirmRemoteExposure: confirmRemoteExposure ?? false,
           allowedHosts: allowedHost ?? [],
           allowedOrigins: allowedOrigin ?? [],
+          ...(process.env.QLM_MCP_HTTP_BEARER_TOKEN === undefined
+            ? {}
+            : { bearerToken: process.env.QLM_MCP_HTTP_BEARER_TOKEN }),
         });
         const writeError = options.writeError ?? ((text) => process.stderr.write(text));
         writeError(`MCP HTTP server listening at ${handle.url}\n`);

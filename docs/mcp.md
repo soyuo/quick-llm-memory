@@ -44,6 +44,12 @@ qlm mcp serve --transport http --host 0.0.0.0 --allow-remote \
 ```
 
 Host and Origin validation runs before MCP dispatch. Origin validation is not
-authentication: use a trusted network boundary and authentication for remote
-deployments. Requests without an Origin header remain available to non-browser
-clients; browser origins outside the allowlist are rejected.
+authentication. Remote binding also requires `QLM_MCP_HTTP_BEARER_TOKEN`; set it
+through the process environment or secret manager, never in project settings or
+saved process metadata. Use a randomly generated token with at least 32
+characters. Requests to `/mcp` must send `Authorization: Bearer <token>`; missing
+or invalid credentials are rejected before tool dispatch. Rotate the token by
+replacing the environment secret and restarting the server. Loopback servers
+may also opt into bearer authentication by setting the variable. Requests
+without an Origin header remain available to non-browser clients when they pass
+authentication; browser origins outside the allowlist are rejected.
