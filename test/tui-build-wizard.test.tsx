@@ -15,6 +15,8 @@ import type { HierarchyNode } from '../src/knowledge/planner.js';
 import type { AIProvider, GenerateRequest, GenerateResponse, ModelInfo, StructuredRequest, TokenCount } from '../src/providers/provider.js';
 import { TuiApp } from '../src/tui/app.js';
 import { validateBuildWizardStep, type BuildWizardDraft } from '../src/tui/build-wizard.js';
+import { updateGeneratedDocumentBaseline } from '../src/knowledge/document-generator.js';
+import { buildProjectKnowledge } from '../src/knowledge/builder.js';
 
 const temporaryRoots: string[] = [];
 
@@ -141,7 +143,7 @@ describe('TUI knowledge build setup wizard', () => {
     expect(app.lastFrame()).toContain('notes.md');
     expect(app.lastFrame()).toContain('[Modified] source file: notes.md');
     expect(app.lastFrame()).toContain('[Modified] section: notes.md');
-    expect(previewFrame).toContain('Impact plan: 1 document(s) to regenerate, 1 unaffected, 0 output(s) pending removal review, 1 parent index(es), 0 removed source(s) for review.');
+    expect(previewFrame).toContain('Impact plan: 1 document(s) to regenerate, 0 edited document(s) need review, 1 unaffected, 0 output(s) pending removal review, 1 parent index(es), 0 removed source(s) for review.');
     expect(app.lastFrame()).toContain('[Regenerate] security/related.md');
     expect(app.lastFrame()).toContain('[Update index] security/index.md');
     expect(provider.requests.map(({ schemaName }) => schemaName)).toEqual(['qlm_knowledge_hierarchy']);
@@ -180,6 +182,77 @@ describe('TUI knowledge build setup wizard', () => {
     expect(app.lastFrame()).toContain('Selected project: quick-llm');
     expect(app.lastFrame()).toContain('Knowledge: 1 categories, 2 documents');
     expect(listProjects(dataRoot)).toHaveLength(1);
+    app.unmount();
+  }, 15_000);
+
+  it('compares and explicitly applies an edited document only after Edited Document Review', async () => {
+    const fixture = await createTuiConflictFixture();
+    const app = render(
+      <TuiApp columns={120} rows={30} dataRoot={fixture.dataRoot} buildProviderFactory={() => fixture.provider} />,
+    );
+    await enterBuildAnalysis(app, fixture.sourceFile);
+    await waitForFrame(app, '8/12 Structure Preview');
+    expect(app.lastFrame()).toContain('[Edited document: content changed] notes.md');
+    expect(readFileSync(fixture.documentPath, 'utf8')).toBe(fixture.editedMarkdown);
+
+    app.stdin.write('\r');
+    await flushInkEffects();
+    app.stdin.write('y');
+    await flushInkEffects();
+    await waitForFrame(app, 'Edited Document Review');
+    expect(app.lastFrame()).toContain('Choice: keep');
+    expect(readFileSync(fixture.documentPath, 'utf8')).toBe(fixture.editedMarkdown);
+
+    app.stdin.write('c');
+    await flushInkEffects();
+    expect(app.lastFrame()).toContain('Compare current and generated: notes.md');
+    expect(app.lastFrame()).toContain('- My manual addition.');
+    app.stdin.write('\u001b');
+    await waitForFrame(app, 'Choice: keep');
+    app.stdin.write('a');
+    await flushInkEffects();
+    app.stdin.write('\r');
+    await waitForFrame(app, '12/12 Complete');
+    const finalMarkdown = readFileSync(fixture.documentPath, 'utf8');
+    expect(finalMarkdown).toContain('Generated knowledge document.');
+    expect(finalMarkdown).not.toContain('My manual addition.');
+    app.unmount();
+  }, 15_000);
+
+  it('opens the manual merge editor with only the selected project document and candidate', async () => {
+    const fixture = await createTuiConflictFixture();
+    let editorInputs: string[] = [];
+    const app = render(
+      <TuiApp
+        columns={120}
+        rows={30}
+        dataRoot={fixture.dataRoot}
+        buildProviderFactory={() => fixture.provider}
+        buildMergeEditor={async (currentMarkdown, candidateMarkdown) => {
+          editorInputs = [currentMarkdown, candidateMarkdown];
+          return candidateMarkdown.replace(
+            'Generated knowledge document.',
+            'Generated knowledge document.\n\nMy manual addition.\n\nMerged manual addition.',
+          );
+        }}
+      />,
+    );
+    await enterBuildAnalysis(app, fixture.sourceFile);
+    await waitForFrame(app, '8/12 Structure Preview');
+    app.stdin.write('\r');
+    await flushInkEffects();
+    app.stdin.write('y');
+    await flushInkEffects();
+    await waitForFrame(app, 'Edited Document Review');
+    app.stdin.write('m');
+    await waitForFrame(app, 'manual merge ready');
+    expect(editorInputs[0]).toBe(fixture.editedMarkdown);
+    expect(editorInputs[1]).toContain('Generated knowledge document.');
+    app.stdin.write('\r');
+    await waitForFrame(app, '12/12 Complete');
+    const finalMarkdown = readFileSync(fixture.documentPath, 'utf8');
+    expect(finalMarkdown).toContain('Merged manual addition.');
+    expect(finalMarkdown).toContain('My manual addition.');
     app.unmount();
   }, 15_000);
 
@@ -305,7 +378,7 @@ function existingDocument(id: string, title: string): string {
 }
 
 function trackedDocument(id: string, title: string, sourceId: string, sectionId: string): string {
-  return [
+  return updateGeneratedDocumentBaseline([
     '---',
     'schema_version: 1',
     `id: ${id}`,
@@ -316,13 +389,17 @@ function trackedDocument(id: string, title: string, sourceId: string, sectionId:
     `source_ids: [${sourceId}]`,
     `source_sections: [${sourceId}:${sectionId}]`,
     'related: []',
+    'generation:',
+    '  provider: fake-provider',
+    '  model: previous-model',
+    '  revision: 1',
     '---',
     '',
     `# ${title}`,
     '',
     'Existing tracked content.',
     '',
-  ].join('\n');
+  ].join('\n'));
 }
 
 function categoryIndex(id: string, title: string): string {
@@ -343,6 +420,58 @@ function createTemporaryRoot(prefix: string): string {
   const root = mkdtempSync(join(tmpdir(), prefix));
   temporaryRoots.push(root);
   return root;
+}
+
+async function createTuiConflictFixture() {
+  const dataRoot = createTemporaryRoot('qlm-wizard-conflict-data-');
+  const sourceRoot = createTemporaryRoot('qlm-wizard-conflict-source-');
+  const sourceFile = join(sourceRoot, 'notes.md');
+  writeFileSync(sourceFile, '# Notes\n\nOriginal source material.\n');
+  const project = initializeProject(dataRoot, 'quick-llm');
+  const projectRoot = join(dataRoot, 'projects', project.name);
+  const knowledgeRoot = join(projectRoot, 'knowledge');
+  const source = loadMarkdownSources(sourceFile)[0];
+  if (source === undefined) throw new Error('Expected the original Markdown source.');
+  const parsed = await new MarkdownDocumentParser().parse(source);
+  const hierarchy: HierarchyNode[] = [{
+    id: 'notes',
+    name: 'Notes',
+    type: 'document',
+    path: 'notes.md',
+    description: 'Project notes.',
+    sourceSectionIds: parsed.sections.map(({ id }) => id),
+    relatedDocumentIds: [],
+    children: [],
+  }];
+  await buildProjectKnowledge({
+    sourcePath: sourceFile,
+    projectRoot,
+    knowledgeRoot,
+    project,
+    provider: new FakeWizardProvider(hierarchy),
+    model: 'test-model',
+  });
+  const documentPath = join(knowledgeRoot, 'notes.md');
+  const editedMarkdown = readFileSync(documentPath, 'utf8').replace(
+    'Generated knowledge document.',
+    'My manual addition.',
+  );
+  writeFileSync(documentPath, editedMarkdown, 'utf8');
+  writeFileSync(sourceFile, '# Notes\n\nUpdated source material.\n');
+  const updatedSource = loadMarkdownSources(sourceFile)[0];
+  if (updatedSource === undefined) throw new Error('Expected the updated Markdown source.');
+  const updated = await new MarkdownDocumentParser().parse(updatedSource);
+  const updatedHierarchy: HierarchyNode[] = [{
+    ...hierarchy[0]!,
+    sourceSectionIds: updated.sections.map(({ id }) => id),
+  }];
+  return {
+    dataRoot,
+    sourceFile,
+    documentPath,
+    editedMarkdown,
+    provider: new FakeWizardProvider(updatedHierarchy),
+  };
 }
 
 async function flushInkEffects(): Promise<void> {

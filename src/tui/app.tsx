@@ -15,7 +15,7 @@ import {
   type ProjectTransferOperation,
   type ProjectTransferProgress,
 } from '../projects/transfer.js';
-import { BuildWizard } from './build-wizard.js';
+import { BuildWizard, type BuildWizardMergeEditor } from './build-wizard.js';
 import { Explorer } from './explorer.js';
 import { Search } from './search.js';
 import { McpManager } from './mcp-manager.js';
@@ -71,6 +71,7 @@ export interface TuiAppProps {
   dataRoot?: string;
   onExit?: () => void;
   buildProviderFactory?: (settings: Settings) => AIProvider;
+  buildMergeEditor?: BuildWizardMergeEditor;
   mcpConnectionCheck?: (signal: AbortSignal) => Promise<string[]>;
   copyText?: (text: string) => void;
   settingsPaths?: SettingsPaths;
@@ -82,6 +83,7 @@ export function TuiApp({
   dataRoot,
   onExit,
   buildProviderFactory,
+  buildMergeEditor,
   mcpConnectionCheck,
   copyText,
   settingsPaths,
@@ -574,6 +576,7 @@ export function TuiApp({
         <BuildWizard
           dataRoot={root}
           providerFactory={buildProviderFactory}
+          {...(buildMergeEditor === undefined ? {} : { mergeEditor: buildMergeEditor })}
           onBuildComplete={(projectName) => {
             setSelectedProjectName(projectName);
             setRefreshVersion((version) => version + 1);
