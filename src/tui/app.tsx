@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Box, Text, render, useApp, useInput, useWindowSize } from 'ink';
-import { resolveSettingsPaths } from '../config/paths.js';
+import { resolveSettingsPaths, type SettingsPaths } from '../config/paths.js';
 import { InputError, InternalError } from '../errors/qlm-error.js';
 import {
   deleteProject,
@@ -19,6 +19,7 @@ import { BuildWizard } from './build-wizard.js';
 import { Explorer } from './explorer.js';
 import { Search } from './search.js';
 import { McpManager } from './mcp-manager.js';
+import { SettingsScreen } from './settings.js';
 import { loadTuiDashboardSnapshot } from './dashboard.js';
 import type { Settings } from '../config/schema.js';
 import type { AIProvider } from '../providers/provider.js';
@@ -71,6 +72,7 @@ export interface TuiAppProps {
   buildProviderFactory?: (settings: Settings) => AIProvider;
   mcpConnectionCheck?: (signal: AbortSignal) => Promise<string[]>;
   copyText?: (text: string) => void;
+  settingsPaths?: SettingsPaths;
 }
 
 export function TuiApp({
@@ -81,6 +83,7 @@ export function TuiApp({
   buildProviderFactory,
   mcpConnectionCheck,
   copyText,
+  settingsPaths,
 }: TuiAppProps): React.JSX.Element {
   const windowSize = useWindowSize();
   const size = {
@@ -88,7 +91,8 @@ export function TuiApp({
     rows: rows ?? windowSize.rows ?? 24,
   };
   const layout = getTuiLayout(size.columns, size.rows);
-  const root = dataRoot ?? resolveSettingsPaths().dataRoot;
+  const resolvedSettingsPaths = settingsPaths ?? resolveSettingsPaths();
+  const root = dataRoot ?? resolvedSettingsPaths.dataRoot;
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [activeScreen, setActiveScreen] = useState<TuiScreen | undefined>();
   const [selectedProjectName, setSelectedProjectName] = useState<string | undefined>();
@@ -177,6 +181,10 @@ export function TuiApp({
     }
 
     if (activeScreen === 'MCP Manager') {
+      return;
+    }
+
+    if (activeScreen === 'Settings') {
       return;
     }
 
@@ -596,6 +604,15 @@ export function TuiApp({
         <McpManager
           {...(mcpConnectionCheck === undefined ? {} : { probeConnection: mcpConnectionCheck })}
           {...(copyText === undefined ? {} : { copyText })}
+          onBack={() => {
+            setActiveScreen(undefined);
+            setFocusedPane('navigation');
+          }}
+          onExit={onExit}
+        />
+      ) : activeScreen === 'Settings' ? (
+        <SettingsScreen
+          paths={resolvedSettingsPaths}
           onBack={() => {
             setActiveScreen(undefined);
             setFocusedPane('navigation');
