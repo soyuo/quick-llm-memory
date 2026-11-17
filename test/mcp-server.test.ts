@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs';
+import { request as httpRequest } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -163,6 +164,48 @@ describe('MCP server bootstrap', () => {
       .rejects.toThrow('Invalid MCP HTTP port');
   });
 
+  it('enforces remote Host and Origin allowlists before MCP dispatch', async () => {
+    const server = await serveMcpHttp({
+      host: '0.0.0.0', port: 0, allowRemote: true, confirmRemoteExposure: true,
+      allowedHosts: ['127.0.0.1'], allowedOrigins: ['trusted.example'],
+    });
+    const url = `http://127.0.0.1:${server.port}/mcp`;
+    try {
+      const allowed = await fetch(url, { method: 'GET', headers: { host: `127.0.0.1:${server.port}`, origin: 'https://trusted.example' } });
+      expect(allowed.status).not.toBe(403);
+      const hostileOrigin = await fetch(url, { method: 'GET', headers: { host: `127.0.0.1:${server.port}`, origin: 'https://evil.example' } });
+      expect(hostileOrigin.status).toBe(403);
+      const malformedOrigin = await fetch(url, { method: 'GET', headers: { host: `127.0.0.1:${server.port}`, origin: 'not-an-origin' } });
+      expect(malformedOrigin.status).toBe(403);
+      const hostileHostStatus = await requestStatus(url, {
+        host: `evil.example:${server.port}`,
+        origin: 'https://trusted.example',
+      });
+      expect(hostileHostStatus).toBe(403);
+      const missingOrigin = await fetch(url, { method: 'GET', headers: { host: `127.0.0.1:${server.port}` } });
+      expect(missingOrigin.status).not.toBe(403);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('supports IPv6 loopback where available', async ({ skip }) => {
+    let server;
+    try {
+      server = await serveMcpHttp({ host: '::1', port: 0 });
+    } catch {
+      skip();
+      return;
+    }
+    try {
+      expect(server.url).toMatch(/^http:\/\/\[::1\]:\d+\/mcp$/);
+      const rejected = await fetch(server.url, { method: 'GET', headers: { origin: 'https://evil.example' } });
+      expect(rejected.status).toBe(403);
+    } finally {
+      await server.close();
+    }
+  });
+
   it('serves an in-process client over stdio streams with protocol-only output', async () => {
     const clientInput = new PassThrough();
     const serverOutput = new PassThrough();
@@ -312,3 +355,21 @@ describe('MCP server bootstrap', () => {
     expect(errors.join('')).toContain('Unsupported MCP transport');
   });
 });
+
+function requestStatus(url: string, headers: Record<string, string>): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const requestUrl = new URL(url);
+    const request = httpRequest({
+      host: requestUrl.hostname,
+      port: Number(requestUrl.port),
+      path: requestUrl.pathname,
+      method: 'GET',
+      headers,
+    }, (response) => {
+      response.resume();
+      response.once('end', () => resolve(response.statusCode ?? 0));
+    });
+    request.once('error', reject);
+    request.end();
+  });
+}
