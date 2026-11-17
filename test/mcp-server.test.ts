@@ -162,6 +162,8 @@ describe('MCP server bootstrap', () => {
   });
 
   it('starts HTTP with loopback defaults and reports the endpoint on stderr', async () => {
+    let shutdown: (() => Promise<void>) | undefined;
+    const close = vi.fn(async () => {});
     const serveHttp = vi.fn(async ({ host = '127.0.0.1', port = 8765 }: {
       host?: string;
       port?: number;
@@ -169,18 +171,27 @@ describe('MCP server bootstrap', () => {
       host,
       port,
       url: `http://${host}:${port}/mcp`,
-      close: async () => {},
+      close,
     }));
     const errors: string[] = [];
     const exitCode = await runCli(
       ['node', 'qlm', 'mcp', 'serve', '--transport', 'http'],
       { writeError: (text) => errors.push(text) },
-      { serveHttp, writeError: (text) => errors.push(text) },
+      {
+        serveHttp,
+        writeError: (text) => errors.push(text),
+        registerHttpShutdown: (handler) => {
+          shutdown = handler;
+          return () => {};
+        },
+      },
     );
 
     expect(exitCode).toBe(0);
     expect(serveHttp).toHaveBeenCalledWith({ host: '127.0.0.1', port: 8765 });
     expect(errors.join('')).toContain('http://127.0.0.1:8765/mcp');
+    await shutdown?.();
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it('rejects unsupported transports without starting the server', async () => {

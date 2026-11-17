@@ -16,6 +16,7 @@ export interface McpCommandOptions {
   serveStdio?: () => StdioServerHandle | Promise<StdioServerHandle>;
   serveHttp?: (options: Pick<ServeMcpHttpOptions, 'host' | 'port'>) =>
     McpHttpServerHandle | Promise<McpHttpServerHandle>;
+  registerHttpShutdown?: (handler: () => Promise<void>) => () => void;
   stdioServerConfig?: McpStdioServerConfig;
   writeOut?: (text: string) => void;
   writeError?: (text: string) => void;
@@ -61,6 +62,19 @@ export function registerMcpCommands(
         const handle = await startHttpServer({ host, port });
         const writeError = options.writeError ?? ((text) => process.stderr.write(text));
         writeError(`MCP HTTP server listening at ${handle.url}\n`);
+        let removeShutdownHandlers = () => {};
+        const registerShutdownHandlers = options.registerHttpShutdown
+          ?? registerHttpShutdownHandlers;
+        removeShutdownHandlers = registerShutdownHandlers(async () => {
+          try {
+            await handle.close();
+          } catch {
+            process.exitCode = 1;
+            writeError('MCP HTTP server failed to shut down cleanly.\n');
+          } finally {
+            removeShutdownHandlers();
+          }
+        });
         return;
       }
 
@@ -108,4 +122,16 @@ function parseHttpPort(value: string): number {
     });
   }
   return port;
+}
+
+function registerHttpShutdownHandlers(handler: () => Promise<void>): () => void {
+  const onSignal = () => {
+    void handler();
+  };
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
+  return () => {
+    process.off('SIGINT', onSignal);
+    process.off('SIGTERM', onSignal);
+  };
 }
