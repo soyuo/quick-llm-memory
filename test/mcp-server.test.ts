@@ -194,11 +194,12 @@ describe('MCP server bootstrap', () => {
       expect(hostileOrigin.body).not.toContain('sensitive-project');
       const malformedOrigin = await fetch(url, { method: 'GET', headers: { host: `127.0.0.1:${server.port}`, origin: 'not-an-origin' } });
       expect(malformedOrigin.status).toBe(403);
-      const hostileHostStatus = await requestStatus(url, {
+      const hostileHost = await requestJson(url, {
+        ...trustedHeaders,
         host: `evil.example:${server.port}`,
-        origin: 'https://trusted.example',
-      });
-      expect(hostileHostStatus).toBe(403);
+      }, toolCall);
+      expect(hostileHost.status).toBe(403);
+      expect(hostileHost.body).not.toContain('sensitive-project');
       const missingOrigin = await fetch(url, { method: 'GET', headers: { host: `127.0.0.1:${server.port}` } });
       expect(missingOrigin.status).not.toBe(403);
     } finally {
@@ -373,24 +374,6 @@ describe('MCP server bootstrap', () => {
     expect(errors.join('')).toContain('Unsupported MCP transport');
   });
 });
-
-function requestStatus(url: string, headers: Record<string, string>): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const requestUrl = new URL(url);
-    const request = httpRequest({
-      host: requestUrl.hostname,
-      port: Number(requestUrl.port),
-      path: requestUrl.pathname,
-      method: 'GET',
-      headers,
-    }, (response) => {
-      response.resume();
-      response.once('end', () => resolve(response.statusCode ?? 0));
-    });
-    request.once('error', reject);
-    request.end();
-  });
-}
 
 function requestJson(
   url: string,
