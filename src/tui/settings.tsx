@@ -9,7 +9,7 @@ import { sanitizeTerminalText } from './terminal-text.js';
 
 const PROVIDERS = ['openai', 'openai-compatible'] as const;
 const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace'] as const;
-const FIELD_NAMES = ['Provider', 'Model', 'Logging level', 'Generation response cache'] as const;
+const FIELD_NAMES = ['Provider', 'Model', 'Embedding model', 'Logging level', 'Generation response cache'] as const;
 
 export interface SettingsScreenProps {
   paths: SettingsPaths;
@@ -21,7 +21,7 @@ export function SettingsScreen({ paths, onBack, onExit }: SettingsScreenProps): 
   const { exit } = useApp();
   const [loaded, setLoaded] = useState(() => readInitialSettings(paths));
   const [fieldIndex, setFieldIndex] = useState(0);
-  const [editingModel, setEditingModel] = useState(false);
+  const [editingModel, setEditingModel] = useState<'model' | 'embeddingModel'>();
   const [modelDraft, setModelDraft] = useState(loaded.values?.model ?? '');
   const [message, setMessage] = useState(loaded.error);
   const values = loaded.values;
@@ -34,8 +34,8 @@ export function SettingsScreen({ paths, onBack, onExit }: SettingsScreenProps): 
     }
     if (key.escape) {
       if (editingModel) {
-        setEditingModel(false);
-        setModelDraft(values?.model ?? '');
+        setEditingModel(undefined);
+        setModelDraft(values?.[editingModel] ?? '');
       } else {
         onBack?.();
       }
@@ -47,8 +47,8 @@ export function SettingsScreen({ paths, onBack, onExit }: SettingsScreenProps): 
 
     if (editingModel) {
       if (key.return) {
-        setEditingModel(false);
-        setLoaded({ values: { ...values, model: modelDraft.trim() } });
+        setEditingModel(undefined);
+        setLoaded({ values: { ...values, [editingModel]: modelDraft.trim() } });
         setMessage(undefined);
       } else if (key.backspace || input === '\u007f' || input === '\b') {
         setModelDraft((draft) => draft.slice(0, -1));
@@ -66,16 +66,17 @@ export function SettingsScreen({ paths, onBack, onExit }: SettingsScreenProps): 
       const direction = key.rightArrow ? 1 : -1;
       setLoaded({ values: { ...values, provider: cycleValue(PROVIDERS, values.provider, direction) } });
       setMessage(undefined);
-    } else if (fieldIndex === 2 && (key.leftArrow || key.rightArrow)) {
+    } else if (fieldIndex === 3 && (key.leftArrow || key.rightArrow)) {
       const direction = key.rightArrow ? 1 : -1;
       setLoaded({ values: { ...values, loggingLevel: cycleValue(LOG_LEVELS, values.loggingLevel, direction) } });
       setMessage(undefined);
-    } else if (fieldIndex === 3 && (key.leftArrow || key.rightArrow)) {
+    } else if (fieldIndex === 4 && (key.leftArrow || key.rightArrow)) {
       setLoaded({ values: { ...values, cacheGeneration: !values.cacheGeneration } });
       setMessage(undefined);
-    } else if (fieldIndex === 1 && key.return) {
-      setModelDraft(values.model);
-      setEditingModel(true);
+    } else if ((fieldIndex === 1 || fieldIndex === 2) && key.return) {
+      const modelField = fieldIndex === 1 ? 'model' : 'embeddingModel';
+      setModelDraft(values[modelField]);
+      setEditingModel(modelField);
       setMessage('Edit the model, press Enter to keep it, or Esc to discard the edit.');
     } else if (input.toLowerCase() === 's') {
       try {
@@ -83,6 +84,7 @@ export function SettingsScreen({ paths, onBack, onExit }: SettingsScreenProps): 
           ai: {
             provider: values.provider,
             cache_generation: values.cacheGeneration,
+            embedding_model: values.embeddingModel,
             ...(values.model.length > 0 ? { model: values.model } : {}),
           },
           logging: { level: values.loggingLevel },
@@ -109,15 +111,16 @@ export function SettingsScreen({ paths, onBack, onExit }: SettingsScreenProps): 
       ) : (
         <>
           <Text>{fieldIndex === 0 ? '›' : ' '} AI Provider: {sanitizeTerminalText(values.provider)}</Text>
-          <Text>{fieldIndex === 1 ? '›' : ' '} AI Model: {sanitizeTerminalText(editingModel ? `${modelDraft}▏` : (values.model || '(not set)'))}</Text>
-          <Text>{fieldIndex === 2 ? '›' : ' '} Logging level: {sanitizeTerminalText(values.loggingLevel)}</Text>
-          <Text>{fieldIndex === 3 ? '> ' : '  '}Generation response cache: {values.cacheGeneration ? 'Enabled' : 'Disabled'}</Text>
+          <Text>{fieldIndex === 1 ? '›' : ' '} AI Model: {sanitizeTerminalText(editingModel === 'model' ? `${modelDraft}▏` : (values.model || '(not set)'))}</Text>
+          <Text>{fieldIndex === 2 ? '›' : ' '} Embedding model: {sanitizeTerminalText(editingModel === 'embeddingModel' ? `${modelDraft}▏` : values.embeddingModel)}</Text>
+          <Text>{fieldIndex === 3 ? '›' : ' '} Logging level: {sanitizeTerminalText(values.loggingLevel)}</Text>
+          <Text>{fieldIndex === 4 ? '> ' : '  '}Generation response cache: {values.cacheGeneration ? 'Enabled' : 'Disabled'}</Text>
           <Text>Disable generation caching when working with sensitive source documents.</Text>
           <Text>Press s to validate and save; Left/Right changes provider, logging level, or cache setting.</Text>
         </>
       )}
       {message ? <Text>{sanitizeTerminalText(message)}</Text> : null}
-      <Text>Up/Down selects a setting, Enter edits the model, Esc returns, q quits.</Text>
+      <Text>Up/Down selects a setting, Enter edits a model, Esc returns, q quits.</Text>
     </Box>
   );
 }
@@ -134,6 +137,7 @@ function toEditableSettings(settings: Settings): EditableSettingsValues {
   return {
     provider: settings.ai?.provider ?? 'openai',
     model: settings.ai?.model ?? '',
+    embeddingModel: settings.ai?.embedding_model ?? 'text-embedding-3-small',
     cacheGeneration: settings.ai?.cache_generation ?? true,
     loggingLevel: settings.logging.level,
   };

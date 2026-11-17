@@ -13,6 +13,7 @@ export const settingsSchema = z
       .object({
         provider: z.enum(['openai', 'openai-compatible']).default('openai'),
         model: z.string().trim().min(1).optional(),
+        embedding_model: z.string().trim().min(1).default('text-embedding-3-small'),
         cache_generation: z.boolean().default(true),
       })
       .passthrough()

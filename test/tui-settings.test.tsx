@@ -45,6 +45,20 @@ describe('TUI Settings', () => {
     app.stdin.write('\r');
     await flushInkEffects();
     app.stdin.write('\u001b[B');
+    await waitForFrame(app, 'Embedding model: text-embedding-3-small');
+    app.stdin.write('\r');
+    await flushInkEffects();
+    for (let index = 0; index < 'text-embedding-3-small'.length; index += 1) {
+      app.stdin.write('\u007f');
+      await flushInkEffects();
+    }
+    for (const character of 'text-embedding-3-large') {
+      app.stdin.write(character);
+      await flushInkEffects();
+    }
+    app.stdin.write('\r');
+    await flushInkEffects();
+    app.stdin.write('\u001b[B');
     await flushInkEffects();
     app.stdin.write('\u001b[C');
     await flushInkEffects();
@@ -57,6 +71,7 @@ describe('TUI Settings', () => {
 
     expect(readFileSync(paths.configFile, 'utf8')).toContain('provider: openai-compatible');
     expect(readFileSync(paths.configFile, 'utf8')).toContain('model: quick-model');
+    expect(readFileSync(paths.configFile, 'utf8')).toContain('embedding_model: text-embedding-3-large');
     expect(readFileSync(paths.configFile, 'utf8')).toContain('level: debug');
     expect(readFileSync(paths.configFile, 'utf8')).toContain('cache_generation: false');
 
@@ -65,6 +80,7 @@ describe('TUI Settings', () => {
     await openSettings(app);
     expect(app.lastFrame()).toContain('AI Provider: openai-compatible');
     expect(app.lastFrame()).toContain('AI Model: quick-model');
+    expect(app.lastFrame()).toContain('Embedding model: text-embedding-3-large');
     expect(app.lastFrame()).toContain('Logging level: debug');
     expect(app.lastFrame()).toContain('Generation response cache: Disabled');
   });
