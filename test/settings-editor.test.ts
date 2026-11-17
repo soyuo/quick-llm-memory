@@ -30,11 +30,11 @@ describe('updateSettings', () => {
       '  format: json',
     ].join('\n'));
 
-    updateSettings({ provider: 'openai-compatible', model: 'new-model', cacheGeneration: false, loggingLevel: 'debug' }, { paths });
+    updateSettings({ provider: 'openai-compatible', model: 'new-model', embeddingModel: 'embedding-v2', cacheGeneration: false, loggingLevel: 'debug' }, { paths });
 
     expect(loadSettings({ paths })).toMatchObject({
       application: { name: 'quick-llm-memory' },
-      ai: { provider: 'openai-compatible', model: 'new-model', cache_generation: false, future_option: true },
+      ai: { provider: 'openai-compatible', model: 'new-model', embedding_model: 'embedding-v2', cache_generation: false, future_option: true },
       logging: { level: 'debug' },
     });
     expect(parseYaml(readFileSync(paths.configFile, 'utf8'))).toMatchObject({
@@ -45,13 +45,31 @@ describe('updateSettings', () => {
   it('creates a valid config when none exists and clears an optional model', () => {
     const paths = createPaths();
 
-    updateSettings({ provider: 'openai', model: '', cacheGeneration: true, loggingLevel: 'warn' }, { paths });
+    updateSettings({ provider: 'openai', model: '', embeddingModel: 'text-embedding-3-small', cacheGeneration: true, loggingLevel: 'warn' }, { paths });
 
     expect(loadSettings({ paths })).toMatchObject({
-      ai: { provider: 'openai', cache_generation: true },
+      ai: { provider: 'openai', embedding_model: 'text-embedding-3-small', cache_generation: true },
       logging: { level: 'warn' },
     });
     expect(loadSettings({ paths }).ai?.model).toBeUndefined();
+  });
+
+  it('validates embedding model names independently from the chat model', () => {
+    const paths = createPaths();
+    expect(() => updateSettings({
+      provider: 'openai',
+      model: 'chat-model',
+      embeddingModel: '   ',
+      cacheGeneration: true,
+      loggingLevel: 'info',
+    }, { paths })).toThrow(/embedding_model/);
+    expect(() => updateSettings({
+      provider: 'openai',
+      model: 'chat-model',
+      embeddingModel: 'embedding\nmodel',
+      cacheGeneration: true,
+      loggingLevel: 'info',
+    }, { paths })).toThrow(/terminal control characters/);
   });
 
   it('rejects invalid values and credential-bearing config without changing the file', () => {
@@ -64,11 +82,12 @@ describe('updateSettings', () => {
       provider: 'invalid-provider' as EditableSettingsValues['provider'],
       model: 'model',
       cacheGeneration: true,
+      embeddingModel: 'embedding-model',
       loggingLevel: 'info',
     }, { paths })).toThrow();
-    expect(() => updateSettings({ provider: 'openai', model: 'model', cacheGeneration: true, loggingLevel: 'info' }, { paths }))
+    expect(() => updateSettings({ provider: 'openai', model: 'model', embeddingModel: 'embedding-model', cacheGeneration: true, loggingLevel: 'info' }, { paths }))
       .toThrow(ConfigurationError);
-    expect(() => updateSettings({ provider: 'openai', model: 'model', cacheGeneration: true, loggingLevel: 'info' }, { paths }))
+    expect(() => updateSettings({ provider: 'openai', model: 'model', embeddingModel: 'embedding-model', cacheGeneration: true, loggingLevel: 'info' }, { paths }))
       .toThrow(/credentials/);
     expect(readFileSync(paths.configFile, 'utf8')).toBe(original);
     expect(JSON.stringify(parseYaml(readFileSync(paths.configFile, 'utf8')))).toContain('do-not-show');

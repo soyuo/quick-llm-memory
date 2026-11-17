@@ -89,7 +89,12 @@ describe('loadSettings', () => {
 
     expect(settings.logging.level).toBe('info');
     expect(settings.application).toEqual({ name: 'quick-llm-memory' });
-    expect(settings.ai).toEqual({ provider: 'openai', model: 'test-model', cache_generation: true });
+    expect(settings.ai).toEqual({
+      provider: 'openai',
+      model: 'test-model',
+      embedding_model: 'text-embedding-3-small',
+      cache_generation: true,
+    });
   });
 
   it('uses defaults when the config file is missing', () => {
@@ -122,6 +127,23 @@ describe('loadSettings', () => {
 
     expect(() => loadSettings({ paths })).toThrow(ConfigurationError);
     expect(() => loadSettings({ paths })).toThrow(/ai\.model/);
+  });
+
+  it('defaults the embedding model independently and rejects a blank configured value', () => {
+    const defaults = loadSettings({ paths: createSettingsPaths() });
+    expect(defaults.ai?.embedding_model).toBeUndefined();
+
+    const paths = createSettingsPaths();
+    mkdirSync(paths.configDir, { recursive: true });
+    writeFileSync(paths.configFile, 'ai:\n  model: chat-model\n');
+    expect(loadSettings({ paths }).ai).toMatchObject({
+      model: 'chat-model',
+      embedding_model: 'text-embedding-3-small',
+    });
+
+    writeFileSync(paths.configFile, 'ai:\n  model: chat-model\n  embedding_model: "   "\n');
+    expect(() => loadSettings({ paths })).toThrow(ConfigurationError);
+    expect(() => loadSettings({ paths })).toThrow(/ai\.embedding_model/);
   });
 
   it('returns a typed configuration error for invalid YAML', () => {

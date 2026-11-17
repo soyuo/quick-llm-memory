@@ -24,6 +24,7 @@ import { settingsSchema, type Settings } from './schema.js';
 export interface EditableSettingsValues {
   provider: NonNullable<Settings['ai']>['provider'];
   model: string;
+  embeddingModel: string;
   cacheGeneration: boolean;
   loggingLevel: Settings['logging']['level'];
 }
@@ -38,7 +39,8 @@ export function updateSettings(
 ): Settings {
   const paths = options.paths ?? resolveSettingsPaths(options);
   const model = values.model.trim();
-  if (/[\u0000-\u001f\u007f-\u009f]/.test(model)) {
+  const embeddingModel = values.embeddingModel.trim();
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(model) || /[\u0000-\u001f\u007f-\u009f]/.test(embeddingModel)) {
     throw new ConfigurationError('Model names cannot contain terminal control characters.', {
       filePath: paths.configFile,
     });
@@ -46,6 +48,7 @@ export function updateSettings(
   const candidate = settingsSchema.parse({
     ai: {
       provider: values.provider,
+      embedding_model: embeddingModel,
       cache_generation: values.cacheGeneration,
       ...(model.length > 0 ? { model } : {}),
     },
@@ -94,6 +97,7 @@ export function updateSettings(
   } else {
     delete ai.model;
   }
+  ai.embedding_model = embeddingModel;
 
   const next: Record<string, unknown> = {
     ...root,
