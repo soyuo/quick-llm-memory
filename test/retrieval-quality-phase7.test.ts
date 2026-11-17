@@ -11,7 +11,11 @@ const temporaryDirectories: string[] = [];
 const MODEL = 'fixture-embeddings-v1';
 const RANKING_QUERY = 'network';
 const SEMANTIC_QUERY = 'prevent illicit entry';
-const RELEVANT_PATHS = ['network/firewall.md', 'network/router.md'];
+const RELEVANT_PATHS = [
+  'network/firewall.md',
+  'network/router.md',
+  'security/ingress.md',
+];
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
@@ -26,24 +30,45 @@ describe('Phase 7 retrieval quality evaluation', () => {
       projectRoot: fixture.projectRoot,
       project: fixture.project,
       projectId: fixture.project.id,
-      maxResults: 2,
+      maxResults: 3,
       synchronizeStaleIndex: false as const,
     };
 
     const rankingResults = await evaluateQuery(request, fixture.provider, RANKING_QUERY);
     expect(paths(rankingResults.fulltext)).toEqual(['network/router.md', 'network/firewall.md']);
-    expect(paths(rankingResults.semantic)).toEqual(['network/firewall.md', 'network/router.md']);
-    expect(paths(rankingResults.hybrid)).toEqual(['network/firewall.md', 'network/router.md']);
-    for (const results of Object.values(rankingResults)) {
-      expect(topKCoverage(results, RELEVANT_PATHS)).toBe(1);
-    }
+    expect(paths(rankingResults.semantic)).toEqual([
+      'network/firewall.md',
+      'security/ingress.md',
+      'network/router.md',
+    ]);
+    expect(paths(rankingResults.hybrid)).toEqual([
+      'network/firewall.md',
+      'network/router.md',
+      'security/ingress.md',
+    ]);
+    expect(topKCoverage(rankingResults.fulltext, RELEVANT_PATHS)).toBeCloseTo(2 / 3);
+    expect(topKCoverage(rankingResults.semantic, RELEVANT_PATHS)).toBe(1);
+    expect(topKCoverage(rankingResults.hybrid, RELEVANT_PATHS)).toBe(1);
+    expect(rankingResults.hybrid[0]?.score).toBeGreaterThan(rankingResults.hybrid[1]?.score ?? 0);
 
     const semanticResults = await evaluateQuery(request, fixture.provider, SEMANTIC_QUERY);
     expect(semanticResults.fulltext).toEqual([]);
-    expect(paths(semanticResults.semantic)[0]).toBe('network/firewall.md');
-    expect(paths(semanticResults.hybrid)[0]).toBe('network/firewall.md');
-    expect(topKCoverage(semanticResults.semantic, ['network/firewall.md'])).toBe(1);
-    expect(topKCoverage(semanticResults.hybrid, ['network/firewall.md'])).toBe(1);
+    expect(paths(semanticResults.semantic).slice(0, 2)).toEqual([
+      'network/firewall.md',
+      'security/ingress.md',
+    ]);
+    expect(paths(semanticResults.hybrid).slice(0, 2)).toEqual([
+      'network/firewall.md',
+      'security/ingress.md',
+    ]);
+    expect(topKCoverage(semanticResults.semantic.slice(0, 2), [
+      'network/firewall.md',
+      'security/ingress.md',
+    ])).toBe(1);
+    expect(topKCoverage(semanticResults.hybrid.slice(0, 2), [
+      'network/firewall.md',
+      'security/ingress.md',
+    ])).toBe(1);
     expect(fixture.provider.queryCalls).toBe(8);
   });
 });
@@ -100,7 +125,12 @@ async function createLabeledFixture() {
   const projectRoot = join(dataRoot, 'projects', project.name);
   const knowledgeRoot = join(projectRoot, 'knowledge');
   const fixtureRoot = resolve('test/fixtures/retrieval-quality');
-  const paths = ['network/firewall.md', 'network/router.md', 'garden/roses.md'];
+  const paths = [
+    'network/firewall.md',
+    'network/router.md',
+    'security/ingress.md',
+    'garden/roses.md',
+  ];
   for (const path of paths) {
     const destination = join(knowledgeRoot, path);
     mkdirSync(dirname(destination), { recursive: true });
@@ -123,12 +153,11 @@ class FixtureEmbeddingProvider implements EmbeddingProvider {
         this.queryCalls += 1;
       }
       const normalized = text.toLowerCase();
-      if (
-        [RANKING_QUERY, SEMANTIC_QUERY].includes(text.trim().toLowerCase()) ||
-        normalized.includes('firewall')
-      ) {
+      if ([RANKING_QUERY, SEMANTIC_QUERY].includes(text.trim().toLowerCase()) ||
+          normalized.includes('firewall')) {
         return [1, 0];
       }
+      if (normalized.includes('inbound threat inspection')) return [0.95, Math.sqrt(1 - 0.95 ** 2)];
       if (normalized.includes('router')) return [0.8, 0.6];
       return [0, 1];
     });
