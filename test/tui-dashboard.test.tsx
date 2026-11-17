@@ -39,7 +39,7 @@ describe('TUI dashboard and project selector', () => {
     expect(snapshot.documentCount).toBe(2);
     expect(snapshot.categoryCount).toBe(1);
     expect(snapshot.projectSummaryAvailable).toBe(true);
-    expect(snapshot.mcpSummary).toContain('qlm mcp serve');
+    expect(snapshot.mcpSummary).toContain('client-managed');
     expect(JSON.stringify(snapshot)).not.toContain(dataRoot);
     expect(project.name).toBe('alpha');
   });
