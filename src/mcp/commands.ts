@@ -14,7 +14,7 @@ import type { ServeMcpHttpOptions } from './http-server.js';
 
 export interface McpCommandOptions {
   serveStdio?: () => StdioServerHandle | Promise<StdioServerHandle>;
-  serveHttp?: (options: Pick<ServeMcpHttpOptions, 'host' | 'port' | 'managedInstanceId'>) =>
+  serveHttp?: (options: Pick<ServeMcpHttpOptions, 'host' | 'port' | 'managedInstanceId' | 'allowRemote' | 'confirmRemoteExposure' | 'allowedHosts' | 'allowedOrigins'>) =>
     McpHttpServerHandle | Promise<McpHttpServerHandle>;
   registerHttpShutdown?: (handler: () => Promise<void>) => () => void;
   stdioServerConfig?: McpStdioServerConfig;
@@ -40,7 +40,7 @@ export function registerMcpCommands(
       new Option('--transport <transport>', 'MCP transport').default('stdio'),
     )
     .addOption(
-      new Option('--host <host>', 'HTTP bind host (loopback only in this release)')
+      new Option('--host <host>', 'HTTP bind host (loopback by default)')
         .default('127.0.0.1'),
     )
     .addOption(
@@ -51,11 +51,19 @@ export function registerMcpCommands(
     .addOption(
       new Option('--managed-instance-id <id>').hideHelp(),
     )
-    .action(async ({ transport, host, port, managedInstanceId }: {
+    .option('--allow-remote', 'Permit binding outside loopback')
+    .option('--confirm-remote-exposure', 'Confirm exposure of the MCP HTTP endpoint')
+    .option('--allowed-host <hostname>', 'Allowed Host header hostname (repeatable)', (value, previous: string[] = []) => [...previous, value])
+    .option('--allowed-origin <hostname>', 'Allowed Origin hostname (repeatable)', (value, previous: string[] = []) => [...previous, value])
+    .action(async ({ transport, host, port, managedInstanceId, allowRemote, confirmRemoteExposure, allowedHost, allowedOrigin }: {
       transport: string;
       host: string;
       port: number;
       managedInstanceId?: string;
+      allowRemote?: boolean;
+      confirmRemoteExposure?: boolean;
+      allowedHost?: string[];
+      allowedOrigin?: string[];
     }) => {
       if (transport === 'stdio') {
         await startStdioServer();
@@ -70,6 +78,10 @@ export function registerMcpCommands(
           host,
           port,
           ...(managedInstanceId === undefined ? {} : { managedInstanceId }),
+          allowRemote: allowRemote ?? false,
+          confirmRemoteExposure: confirmRemoteExposure ?? false,
+          allowedHosts: allowedHost ?? [],
+          allowedOrigins: allowedOrigin ?? [],
         });
         const writeError = options.writeError ?? ((text) => process.stderr.write(text));
         writeError(`MCP HTTP server listening at ${handle.url}\n`);

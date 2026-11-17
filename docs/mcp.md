@@ -30,3 +30,20 @@ connections and drains active work for up to five seconds; the managed server
 then closes remaining connections and exits itself. The manager sends no PID
 signal. Stdio remains client-managed and is not started or stopped by this HTTP
 process manager.
+
+## HTTP exposure and origins
+
+HTTP binds to `127.0.0.1` by default. Remote binding is opt-in and requires
+`--allow-remote --confirm-remote-exposure`, plus explicit `--allowed-host`
+and `--allowed-origin` hostname entries. For example:
+
+```sh
+qlm mcp serve --transport http --host 0.0.0.0 --allow-remote \
+  --confirm-remote-exposure --allowed-host mcp.example.com \
+  --allowed-origin app.example.com
+```
+
+Host and Origin validation runs before MCP dispatch. Origin validation is not
+authentication: use a trusted network boundary and authentication for remote
+deployments. Requests without an Origin header remain available to non-browser
+clients; browser origins outside the allowlist are rejected.
