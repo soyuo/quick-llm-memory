@@ -100,11 +100,38 @@ export async function rebuildProjectIndexWithEmbeddings(
     throw new InputError('Embedding model must not be empty.');
   }
   const prepared = await createProjectEmbeddings(index.documents, embedding);
+  assertPreparedIndexUnchanged(projectRoot, project, index);
   return commitProjectIndex(projectRoot, project, index, {
     providerId: embedding.provider.id,
     model: embedding.model,
     dimensions: prepared.dimensions,
     rows: prepared.rows,
+  });
+}
+
+function assertPreparedIndexUnchanged(
+  projectRoot: string,
+  project: ProjectMetadata,
+  expected: PreparedProjectIndex,
+): void {
+  const current = prepareProjectIndex(projectRoot, project);
+  if (getProjectIndexFingerprint(current) !== getProjectIndexFingerprint(expected)) {
+    throw new InputError('Markdown changed while embeddings were being generated; the index was not updated.', {
+      suggestedAction: 'Run the index rebuild again to use the current Markdown content.',
+    });
+  }
+}
+
+function getProjectIndexFingerprint(index: PreparedProjectIndex): string {
+  return JSON.stringify({
+    categories: index.categories,
+    documents: index.documents.map((document) => ({
+      id: document.metadata.id,
+      path: document.path,
+      contentHash: document.contentHash,
+      categoryId: document.categoryId,
+    })),
+    relations: index.relations,
   });
 }
 
