@@ -1,4 +1,4 @@
-import { existsSync, realpathSync } from 'node:fs';
+import { realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import {
@@ -9,9 +9,10 @@ import {
 import {
   rebuildProjectIndex,
   rebuildProjectIndexWithEmbeddings,
+  projectEmbeddingsAreCurrent,
   type ProjectIndexRebuildResult,
 } from '../database/reindex.js';
-import { openProjectDatabaseReadOnly, resolveProjectDatabasePath } from '../database/database.js';
+import { openProjectDatabaseReadOnly } from '../database/database.js';
 import { InputError, QLM_ERROR_CODES, QLMError } from '../errors/qlm-error.js';
 import {
   commitGeneratedDocumentUpdates,
@@ -581,39 +582,13 @@ export async function executePreparedKnowledgeBuild(
 function needsEmbeddingSynchronization(options: BuildProjectKnowledgeOptions): boolean {
   const model = options.embeddingModel?.trim();
   if (model === undefined || model.length === 0) return false;
-  const databasePath = resolveProjectDatabasePath(options.projectRoot);
-  if (!existsSync(databasePath)) return true;
-
-  let database: ReturnType<typeof openProjectDatabaseReadOnly>;
-  try {
-    database = openProjectDatabaseReadOnly(options.projectRoot, options.project);
-  } catch {
-    return true;
-  }
-  try {
-    const { count: documentCount } = database.prepare(
-      'SELECT count(*) AS count FROM documents WHERE project_id = ?',
-    ).get(options.project.id) as { count: number };
-    if (documentCount === 0) return false;
-    const metadata = database.prepare(`
-      SELECT provider_id, model, dimensions
-      FROM project_embedding_metadata WHERE project_id = ?
-    `).get(options.project.id) as { provider_id: string; model: string; dimensions: number } | undefined;
-    if (
-      metadata === undefined ||
-      metadata.provider_id !== options.provider.id ||
-      metadata.model !== model
-    ) {
-      return true;
-    }
-    const { count: embeddingCount } = database.prepare(`
-      SELECT count(*) AS count FROM document_embeddings
-      WHERE project_id = ? AND model = ? AND dimensions = ?
-    `).get(options.project.id, model, metadata.dimensions) as { count: number };
-    return embeddingCount < documentCount;
-  } finally {
-    database.close();
-  }
+  if (!isEmbeddingProvider(options.provider)) return true;
+  return !projectEmbeddingsAreCurrent(
+    options.projectRoot,
+    options.project,
+    options.provider.id,
+    model,
+  );
 }
 
 async function rebuildBuildIndex(

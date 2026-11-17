@@ -20,7 +20,11 @@ import { extractMarkdownSections } from '../knowledge/markdown-parser.js';
 import type { SourceDocument } from '../knowledge/source.js';
 import { ProviderError } from '../providers/provider-error.js';
 import type { EmbeddingProvider } from '../providers/provider.js';
-import { openProjectDatabase } from './database.js';
+import {
+  openProjectDatabase,
+  openProjectDatabaseReadOnly,
+  resolveProjectDatabasePath,
+} from './database.js';
 
 interface IndexedCategory {
   id: string;
@@ -61,6 +65,14 @@ interface PreparedEmbedding {
   sectionId: string;
   sourceHash: string;
   vector: number[];
+}
+
+interface EmbeddingInput {
+  documentId: string;
+  kind: 'document' | 'section';
+  sectionId: string;
+  sourceHash: string;
+  text: string;
 }
 
 interface StoredEmbeddingSnapshot {
@@ -107,6 +119,69 @@ export async function rebuildProjectIndexWithEmbeddings(
     dimensions: prepared.dimensions,
     rows: prepared.rows,
   });
+}
+
+export function projectEmbeddingsAreCurrent(
+  projectRoot: string,
+  project: ProjectMetadata,
+  providerId: string,
+  model: string,
+): boolean {
+  const inputs = createProjectEmbeddingInputs(prepareProjectIndex(projectRoot, project).documents);
+  const databasePath = resolveProjectDatabasePath(projectRoot);
+  if (!existsSync(databasePath)) return inputs.length === 0;
+
+  let database: ReturnType<typeof openProjectDatabaseReadOnly>;
+  try {
+    database = openProjectDatabaseReadOnly(projectRoot, project);
+  } catch {
+    return false;
+  }
+  try {
+    const metadata = database.prepare(`
+      SELECT provider_id, model, dimensions FROM project_embedding_metadata WHERE project_id = ?
+    `).get(project.id) as { provider_id: string; model: string; dimensions: number } | undefined;
+    if (inputs.length === 0) return metadata === undefined;
+    if (
+      metadata === undefined ||
+      metadata.provider_id !== providerId ||
+      metadata.model !== model
+    ) {
+      return false;
+    }
+
+    const rows = database.prepare(`
+      SELECT document_id, kind, section_id, source_hash, model, dimensions, vector_json
+      FROM document_embeddings WHERE project_id = ?
+    `).all(project.id) as StoredEmbeddingSnapshot['rows'];
+    if (rows.length !== inputs.length) return false;
+    const rowsByIdentity = new Map<string, StoredEmbeddingSnapshot['rows'][number]>();
+    for (const row of rows) {
+      const identity = JSON.stringify([row.document_id, row.kind, row.section_id]);
+      if (rowsByIdentity.has(identity)) return false;
+      rowsByIdentity.set(identity, row);
+    }
+    return inputs.every((input) => {
+      const row = rowsByIdentity.get(JSON.stringify([input.documentId, input.kind, input.sectionId]));
+      if (
+        row === undefined ||
+        row.source_hash !== input.sourceHash ||
+        row.model !== model ||
+        row.dimensions !== metadata.dimensions
+      ) {
+        return false;
+      }
+      try {
+        const vector: unknown = JSON.parse(row.vector_json) as unknown;
+        return Array.isArray(vector) && vector.length === metadata.dimensions &&
+          vector.every((value) => typeof value === 'number' && Number.isFinite(value));
+      } catch {
+        return false;
+      }
+    });
+  } finally {
+    database.close();
+  }
 }
 
 function assertPreparedIndexUnchanged(
@@ -369,44 +444,7 @@ async function createProjectEmbeddings(
   documents: IndexedDocument[],
   { provider, model }: ProjectEmbeddingSyncOptions,
 ): Promise<{ dimensions?: number; rows: PreparedEmbedding[] }> {
-  const inputs: Array<Omit<PreparedEmbedding, 'vector'> & { text: string }> = [];
-  for (const document of documents) {
-    const documentText = [
-      document.metadata.title,
-      document.metadata.description ?? '',
-      (document.metadata.tags ?? []).join(' '),
-      document.body.trim(),
-    ].filter(Boolean).join('\n\n').trim();
-    inputs.push({
-      documentId: document.metadata.id,
-      kind: 'document',
-      sectionId: '',
-      sourceHash: createHash('sha256').update(documentText, 'utf8').digest('hex'),
-      text: documentText,
-    });
-
-    const source: SourceDocument = {
-      id: document.metadata.id,
-      path: document.path,
-      format: 'markdown',
-      content: document.body,
-      hash: document.contentHash,
-      size: Buffer.byteLength(document.body, 'utf8'),
-      modifiedAt: document.metadata.updated_at ?? document.metadata.created_at ?? '',
-      metadata: {},
-    };
-    for (const section of extractMarkdownSections(source)) {
-      const text = [section.title, section.content.trim()].filter(Boolean).join('\n\n');
-      inputs.push({
-        documentId: document.metadata.id,
-        kind: 'section',
-        sectionId: section.id,
-        sourceHash: createHash('sha256').update(text, 'utf8').digest('hex'),
-        text,
-      });
-    }
-  }
-
+  const inputs = createProjectEmbeddingInputs(documents);
   if (inputs.length === 0) {
     return { rows: [] };
   }
@@ -449,6 +487,47 @@ async function createProjectEmbeddings(
     }
   }
   return { dimensions, rows };
+}
+
+function createProjectEmbeddingInputs(documents: IndexedDocument[]): EmbeddingInput[] {
+  const inputs: EmbeddingInput[] = [];
+  for (const document of documents) {
+    const documentText = [
+      document.metadata.title,
+      document.metadata.description ?? '',
+      (document.metadata.tags ?? []).join(' '),
+      document.body.trim(),
+    ].filter(Boolean).join('\n\n').trim();
+    inputs.push({
+      documentId: document.metadata.id,
+      kind: 'document',
+      sectionId: '',
+      sourceHash: createHash('sha256').update(documentText, 'utf8').digest('hex'),
+      text: documentText,
+    });
+
+    const source: SourceDocument = {
+      id: document.metadata.id,
+      path: document.path,
+      format: 'markdown',
+      content: document.body,
+      hash: document.contentHash,
+      size: Buffer.byteLength(document.body, 'utf8'),
+      modifiedAt: document.metadata.updated_at ?? document.metadata.created_at ?? '',
+      metadata: {},
+    };
+    for (const section of extractMarkdownSections(source)) {
+      const text = [section.title, section.content.trim()].filter(Boolean).join('\n\n');
+      inputs.push({
+        documentId: document.metadata.id,
+        kind: 'section',
+        sectionId: section.id,
+        sourceHash: createHash('sha256').update(text, 'utf8').digest('hex'),
+        text,
+      });
+    }
+  }
+  return inputs;
 }
 
 function collectCategories(
