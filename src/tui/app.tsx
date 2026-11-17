@@ -16,6 +16,7 @@ import {
   type ProjectTransferProgress,
 } from '../projects/transfer.js';
 import { BuildWizard } from './build-wizard.js';
+import { Explorer } from './explorer.js';
 import { loadTuiDashboardSnapshot } from './dashboard.js';
 import type { Settings } from '../config/schema.js';
 import type { AIProvider } from '../providers/provider.js';
@@ -149,6 +150,13 @@ export function TuiApp({ columns, rows, dataRoot, onExit, buildProviderFactory }
 
   useInput((input, key) => {
     if (activeScreen === 'Build') {
+      return;
+    }
+
+    if (activeScreen === 'Explorer') {
+      if (input.toLowerCase() === 'r') {
+        setRefreshVersion((version) => version + 1);
+      }
       return;
     }
 
@@ -541,6 +549,17 @@ export function TuiApp({ columns, rows, dataRoot, onExit, buildProviderFactory }
             setActiveScreen(undefined);
             setFocusedPane('navigation');
           }}
+        />
+      ) : activeScreen === 'Explorer' ? (
+        <Explorer
+          dataRoot={root}
+          projectName={currentProjectName}
+          refreshVersion={refreshVersion}
+          onBack={() => {
+            setActiveScreen(undefined);
+            setFocusedPane('navigation');
+          }}
+          onExit={onExit}
         />
       ) : (
         <Text>{activeScreen} screen is not available yet.</Text>
