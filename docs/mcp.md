@@ -14,4 +14,4 @@ qlm mcp serve --transport http --host 127.0.0.1 --port 8765
 
 The endpoint is `http://127.0.0.1:8765/mcp`. The default listener is loopback-only. This release rejects non-loopback bind hosts; explicit remote access and its additional security controls are tracked separately. The server registers the same MCP tools, resources, and prompts as stdio.
 
-To stop a foreground server, interrupt the command. Background start/stop/status controls are not part of this command yet.
+Stop the foreground server with Ctrl+C or SIGTERM; the CLI closes the HTTP and MCP server handlers. Background start/stop/status controls are not part of this command yet.
