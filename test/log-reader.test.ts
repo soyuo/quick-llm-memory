@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { formatSanitizedLogExport, readApplicationLogs, filterApplicationLogs } from '../src/logging/log-reader.js';
 import { resolveLogFilePath } from '../src/logging/logger.js';
@@ -65,7 +65,7 @@ describe('application log reader', () => {
 });
 
 function createRoot(): string {
-  const root = mkdtempSync(`${tmpdir()}\\qlm-logs-`);
+  const root = mkdtempSync(join(tmpdir(), 'qlm-logs-'));
   roots.push(root);
   return root;
 }
