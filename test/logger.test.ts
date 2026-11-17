@@ -39,6 +39,9 @@ describe('application logger', () => {
         event: 'safe.metadata',
         prompt: 'private prompt text',
         apiKey: 'private key',
+        password: 'private password',
+        cookie: 'private cookie',
+        credential: 'private credential',
         nested: { content: 'private content' },
       },
       'Safe metadata event',
@@ -68,6 +71,9 @@ describe('application logger', () => {
     expect(records[1]).toMatchObject({
       prompt: '[Redacted]',
       apiKey: '[Redacted]',
+      password: '[Redacted]',
+      cookie: '[Redacted]',
+      credential: '[Redacted]',
       nested: { content: '[Redacted]' },
     });
     expect(records[2].metadata).toEqual({
@@ -85,6 +91,9 @@ describe('application logger', () => {
     expect(output.join('')).not.toContain('private prompt text');
     expect(output.join('')).not.toContain('private key');
     expect(output.join('')).not.toContain('private content');
+    expect(output.join('')).not.toContain('private password');
+    expect(output.join('')).not.toContain('private cookie');
+    expect(output.join('')).not.toContain('private credential');
     expect(output.join('')).not.toContain('private deep prompt');
     expect(output.join('')).not.toContain('private nested message');
     expect(output.join('')).not.toContain('private freeform prompt');

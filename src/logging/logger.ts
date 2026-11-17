@@ -15,6 +15,10 @@ const SENSITIVE_FIELDS = new Set([
   'query',
   'question',
   'text',
+  'password',
+  'cookie',
+  'credential',
+  'privatekey',
 ]);
 
 export interface CreateApplicationLoggerOptions {
