@@ -12,6 +12,7 @@ import {
   executePreparedKnowledgeBuild,
   prepareProjectKnowledgeBuild,
 } from '../src/knowledge/builder.js';
+import { hashGeneratedDocumentContent } from '../src/knowledge/document-generator.js';
 import { MarkdownDocumentParser } from '../src/knowledge/markdown-parser.js';
 import { validateKnowledgeHierarchy } from '../src/knowledge/hierarchy-validator.js';
 import type { HierarchyNode } from '../src/knowledge/planner.js';
@@ -35,6 +36,148 @@ afterEach(() => {
 });
 
 describe('incremental knowledge builds', () => {
+  it('treats legacy generated documents without a baseline as conflicts', async () => {
+    const fixture = createFixture();
+    const originalSections = await parseSections(fixture.sourcePath);
+    await buildProjectKnowledge({
+      ...fixture,
+      provider: new IncrementalProvider(createHierarchy(originalSections)),
+      model: 'test-model',
+    });
+    const documentPath = join(fixture.knowledgeRoot, 'alpha.md');
+    const legacyMarkdown = readFileSync(documentPath, 'utf8').replace(/^  baseline_hash: [0-9a-f]{64}\r?\n/mu, '');
+    writeFileSync(documentPath, legacyMarkdown, 'utf8');
+    writeFileSync(fixture.sourcePath, sourceText('Alpha content revised.', 'Beta content remains.'), 'utf8');
+    const changedSections = await parseSections(fixture.sourcePath);
+    const provider = new IncrementalProvider(createHierarchy(changedSections));
+    const prepared = await prepareProjectKnowledgeBuild({
+      ...fixture,
+      provider,
+      model: 'test-model',
+      incremental: true,
+    });
+
+    expect(prepared.documentConflicts).toEqual([{ path: 'alpha.md', reason: 'missing-baseline' }]);
+  });
+
+  it('keeps edited documents by default and reports the unresolved-content choice', async () => {
+    const { fixture, prepared, provider, documentPath, editedMarkdown } = await createEditedDocumentBuild();
+    expect(prepared.documentConflicts).toEqual([{ path: 'alpha.md', reason: 'edited' }]);
+    const result = await executePreparedKnowledgeBuild(prepared, {
+      ...fixture,
+      provider,
+      model: 'test-model',
+      incremental: true,
+    });
+
+    expect(result.conflictResolutions).toEqual([{ path: 'alpha.md', action: 'keep' }]);
+    expect(result.documents).toBe(0);
+    expect(readFileSync(documentPath, 'utf8')).toBe(editedMarkdown);
+    expect(result.index.documents).toBe(2);
+  });
+
+  it('applies an explicitly approved candidate and updates its baseline', async () => {
+    const { fixture, prepared, provider, documentPath } = await createEditedDocumentBuild();
+    const result = await executePreparedKnowledgeBuild(prepared, {
+      ...fixture,
+      provider,
+      model: 'test-model',
+      incremental: true,
+      onDocumentConflicts: async (conflicts) => {
+        expect(conflicts).toHaveLength(1);
+        expect(conflicts[0]?.currentMarkdown).toContain('My manual clarification.');
+        return { 'alpha.md': { action: 'apply' } };
+      },
+    });
+
+    const current = readFileSync(documentPath, 'utf8');
+    const parsed = (await import('../src/markdown/parser.js')).parseMarkdownDocument(current, 'alpha.md');
+    expect(result.conflictResolutions).toEqual([{ path: 'alpha.md', action: 'apply' }]);
+    expect(current).toContain('Generated verified summary.');
+    expect(current).not.toContain('My manual clarification.');
+    expect(parsed.metadata.type === 'document' ? parsed.metadata.generation?.baseline_hash : undefined)
+      .toBe(hashGeneratedDocumentContent(current));
+  });
+
+  it('commits a manually merged candidate with a new baseline and leaves excluded edits untouched', async () => {
+    const mergedBuild = await createEditedDocumentBuild();
+    const mergedResult = await executePreparedKnowledgeBuild(mergedBuild.prepared, {
+      ...mergedBuild.fixture,
+      provider: mergedBuild.provider,
+      model: 'test-model',
+      incremental: true,
+      onDocumentConflicts: async ([conflict]) => ({
+        'alpha.md': {
+          action: 'merge',
+          mergedMarkdown: conflict?.candidate.markdown.replace(
+            'Generated verified summary.',
+            'Generated verified summary.\n\nMy manual clarification.',
+          ),
+        },
+      }),
+    });
+    const mergedMarkdown = readFileSync(mergedBuild.documentPath, 'utf8');
+    const merged = (await import('../src/markdown/parser.js')).parseMarkdownDocument(mergedMarkdown, 'alpha.md');
+    expect(mergedResult.conflictResolutions).toEqual([{ path: 'alpha.md', action: 'merge' }]);
+    expect(mergedMarkdown).toContain('My manual clarification.');
+    expect(merged.metadata.type === 'document' ? merged.metadata.generation?.baseline_hash : undefined)
+      .toBe(hashGeneratedDocumentContent(mergedMarkdown));
+
+    const excludedBuild = await createEditedDocumentBuild();
+    const before = readFileSync(excludedBuild.documentPath, 'utf8');
+    const excludedResult = await executePreparedKnowledgeBuild(excludedBuild.prepared, {
+      ...excludedBuild.fixture,
+      provider: excludedBuild.provider,
+      model: 'test-model',
+      incremental: true,
+      onDocumentConflicts: async () => ({ 'alpha.md': { action: 'exclude' } }),
+    });
+    expect(excludedResult.conflictResolutions).toEqual([{ path: 'alpha.md', action: 'exclude' }]);
+    expect(readFileSync(excludedBuild.documentPath, 'utf8')).toBe(before);
+  });
+
+  it('cancels conflict review before changing documents or the index', async () => {
+    const { fixture, prepared, provider, documentPath, editedMarkdown } = await createEditedDocumentBuild();
+    const databasePath = resolveProjectDatabasePath(fixture.projectRoot);
+    const databaseBefore = hashFile(databasePath);
+    const controller = new AbortController();
+    await expect(executePreparedKnowledgeBuild(prepared, {
+      ...fixture,
+      provider,
+      model: 'test-model',
+      incremental: true,
+      signal: controller.signal,
+      onDocumentConflicts: async () => {
+        controller.abort(new Error('User cancelled review.'));
+        return {};
+      },
+    })).rejects.toThrow('The knowledge build was cancelled.');
+    expect(readFileSync(documentPath, 'utf8')).toBe(editedMarkdown);
+    expect(hashFile(databasePath)).toBe(databaseBefore);
+  });
+
+  it('rolls back when an edited document changes after review but before commit', async () => {
+    const { fixture, prepared, provider, documentPath } = await createEditedDocumentBuild();
+    const databasePath = resolveProjectDatabasePath(fixture.projectRoot);
+    const databaseBefore = hashFile(databasePath);
+    const changedAfterReview = readFileSync(documentPath, 'utf8').replace(
+      'My manual clarification.',
+      'A newer concurrent edit.',
+    );
+    await expect(executePreparedKnowledgeBuild(prepared, {
+      ...fixture,
+      provider,
+      model: 'test-model',
+      incremental: true,
+      onDocumentConflicts: async () => {
+        writeFileSync(documentPath, changedAfterReview, 'utf8');
+        return { 'alpha.md': { action: 'apply' } };
+      },
+    })).rejects.toThrow('The document changed after conflict review: alpha.md.');
+    expect(readFileSync(documentPath, 'utf8')).toBe(changedAfterReview);
+    expect(hashFile(databasePath)).toBe(databaseBefore);
+  });
+
   it('regenerates only impacted outputs and preserves unrelated Markdown', async () => {
     const fixture = createFixture();
     const originalSections = await parseSections(fixture.sourcePath);
@@ -218,15 +361,15 @@ describe('incremental knowledge builds', () => {
     );
     const databasePath = resolveProjectDatabasePath(fixture.projectRoot);
     const databaseBefore = hashFile(databasePath);
-    const originalRename = fs.renameSync;
+    const originalLink = fs.linkSync;
     let failedInstall = false;
-    fs.renameSync = ((source: string, destination: string) => {
+    fs.linkSync = ((source: string, destination: string) => {
       if (!failedInstall && source.endsWith('.stage') && destination.endsWith('alpha.md')) {
         failedInstall = true;
         throw new Error('injected commit failure');
       }
-      originalRename(source, destination);
-    }) as typeof fs.renameSync;
+      originalLink(source, destination);
+    }) as typeof fs.linkSync;
     syncBuiltinESMExports();
     try {
       await expect(executePreparedKnowledgeBuild(prepared, {
@@ -236,7 +379,7 @@ describe('incremental knowledge builds', () => {
         incremental: true,
       })).rejects.toThrow('Unable to commit generated Markdown documents.');
     } finally {
-      fs.renameSync = originalRename;
+      fs.linkSync = originalLink;
       syncBuiltinESMExports();
     }
     expect(failedInstall).toBe(true);
@@ -244,6 +387,32 @@ describe('incremental knowledge builds', () => {
     expect(hashFile(databasePath)).toBe(databaseBefore);
   });
 });
+
+async function createEditedDocumentBuild() {
+  const fixture = createFixture();
+  const originalSections = await parseSections(fixture.sourcePath);
+  await buildProjectKnowledge({
+    ...fixture,
+    provider: new IncrementalProvider(createHierarchy(originalSections)),
+    model: 'test-model',
+  });
+  const documentPath = join(fixture.knowledgeRoot, 'alpha.md');
+  const editedMarkdown = readFileSync(documentPath, 'utf8').replace(
+    'Generated verified summary.',
+    'My manual clarification.',
+  );
+  writeFileSync(documentPath, editedMarkdown, 'utf8');
+  writeFileSync(fixture.sourcePath, sourceText('Alpha content revised.', 'Beta content remains.'), 'utf8');
+  const changedSections = await parseSections(fixture.sourcePath);
+  const provider = new IncrementalProvider(createHierarchy(changedSections));
+  const prepared = await prepareProjectKnowledgeBuild({
+    ...fixture,
+    provider,
+    model: 'test-model',
+    incremental: true,
+  });
+  return { fixture, provider, prepared, documentPath, editedMarkdown };
+}
 
 function createFixture() {
   const dataRoot = mkdtempSync(join(tmpdir(), 'qlm-incremental-build-'));

@@ -1,4 +1,5 @@
 import { realpathSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import {
   readProjectSourceSnapshotReadOnly,
@@ -6,6 +7,7 @@ import {
   type ProjectSourceSnapshot,
 } from '../database/source-snapshot.js';
 import { rebuildProjectIndex, type ProjectIndexRebuildResult } from '../database/reindex.js';
+import { openProjectDatabaseReadOnly } from '../database/database.js';
 import { InputError, QLM_ERROR_CODES, QLMError } from '../errors/qlm-error.js';
 import {
   commitGeneratedDocumentUpdates,
@@ -15,12 +17,19 @@ import {
 import { assertValidGeneratedDocuments } from './generated-document-validator.js';
 import { assertValidKnowledgeHierarchy } from './hierarchy-validator.js';
 import { MarkdownDocumentParser } from './markdown-parser.js';
-import { generateMarkdownDocument, type GeneratedMarkdownCandidate } from './document-generator.js';
+import {
+  generateMarkdownDocument,
+  hashGeneratedDocumentContent,
+  updateGeneratedDocumentBaseline,
+  type GeneratedMarkdownCandidate,
+} from './document-generator.js';
 import { planKnowledgeHierarchy, type HierarchyNode } from './planner.js';
 import { planProjectKnowledgeImpact, type KnowledgeImpactPlan } from './impact-planner.js';
 import type { AIProvider } from '../providers/provider.js';
 import type { ProjectMetadata } from '../projects/schema.js';
 import { loadMarkdownSources, type SourceSection } from './source.js';
+import { readStoredMarkdownSource } from '../markdown/repository.js';
+import { parseMarkdownDocument } from '../markdown/parser.js';
 import {
   compareProjectSourceSnapshots,
   createProjectSourceSnapshot,
@@ -84,6 +93,9 @@ export interface BuildProjectKnowledgeOptions {
   };
   /** Generate only the outputs selected by the source impact plan. */
   incremental?: boolean;
+  onDocumentConflicts?: (
+    conflicts: readonly GeneratedDocumentConflict[],
+  ) => Promise<Readonly<Record<string, DocumentConflictResolution>>>;
   clock?: () => Date;
   signal?: AbortSignal;
   onProgress?: BuildProgressSink;
@@ -99,6 +111,25 @@ export interface BuildProjectKnowledgeResult {
   index: ProjectIndexRebuildResult;
   noOp?: boolean;
   pendingRemovalPaths?: string[];
+  conflictResolutions?: Array<{ path: string; action: DocumentConflictAction }>;
+}
+
+export type DocumentConflictAction = 'keep' | 'apply' | 'merge' | 'exclude';
+
+export interface DocumentConflictResolution {
+  action: DocumentConflictAction;
+  mergedMarkdown?: string;
+}
+
+export interface PreparedDocumentConflict {
+  path: string;
+  reason: 'edited' | 'missing-baseline';
+}
+
+export interface GeneratedDocumentConflict extends PreparedDocumentConflict {
+  currentMarkdown: string;
+  candidate: GeneratedMarkdownCandidate;
+  currentContentHash: string;
 }
 
 export interface PreparedKnowledgeBuild {
@@ -110,6 +141,7 @@ export interface PreparedKnowledgeBuild {
   impactPlan: KnowledgeImpactPlan;
   regenerationPaths: string[];
   pendingRemovalPaths: string[];
+  documentConflicts: PreparedDocumentConflict[];
   selective: boolean;
   noOp: boolean;
   pendingOnly: boolean;
@@ -213,6 +245,9 @@ export async function prepareProjectKnowledgeBuild(
       : [];
     const pendingOnly = selective && regenerationPaths.length === 0 && pendingRemovalPaths.length > 0;
     const noOp = selective && regenerationPaths.length === 0 && pendingRemovalPaths.length === 0;
+    const documentConflicts = selective
+      ? inspectPreparedDocumentConflicts(options.knowledgeRoot, regenerationPaths)
+      : [];
 
     if (noOp || pendingOnly) {
       emit({
@@ -231,6 +266,7 @@ export async function prepareProjectKnowledgeBuild(
         impactPlan,
         regenerationPaths,
         pendingRemovalPaths,
+        documentConflicts,
         selective,
         noOp,
         pendingOnly,
@@ -275,6 +311,7 @@ export async function prepareProjectKnowledgeBuild(
       impactPlan,
       regenerationPaths: preparedRegenerationPaths,
       pendingRemovalPaths,
+      documentConflicts,
       selective,
       noOp,
       pendingOnly,
@@ -385,20 +422,100 @@ export async function executePreparedKnowledgeBuild(
     const validatedCandidates = assertValidGeneratedDocuments(candidates, selectedHierarchy, sections);
     ensureNotCancelled();
 
+    let committedCandidates = validatedCandidates;
+    const conflictResolutions: Array<{ path: string; action: DocumentConflictAction }> = [];
+    const expectedCurrentHashes = new Map<string, string | null>();
+    if (incremental) {
+      const conflictStates = inspectGeneratedCandidateConflicts(
+        options.knowledgeRoot,
+        validatedCandidates,
+      );
+      for (const state of conflictStates) {
+        if (state.currentMarkdown !== undefined) {
+          expectedCurrentHashes.set(state.candidate.path, hashExactMarkdown(state.currentMarkdown));
+        } else {
+          expectedCurrentHashes.set(state.candidate.path, null);
+        }
+      }
+      const conflicts: GeneratedDocumentConflict[] = [];
+      for (const state of conflictStates) {
+        if (state.conflict) {
+          conflicts.push({
+            path: state.candidate.path,
+            reason: state.reason,
+            currentMarkdown: state.currentMarkdown,
+            candidate: state.candidate,
+            currentContentHash: state.currentContentHash,
+          });
+        }
+      }
+      const requestedResolutions = conflicts.length === 0
+        ? {}
+        : await options.onDocumentConflicts?.(conflicts) ?? {};
+      ensureNotCancelled();
+      const resolvedCandidates = new Map<string, GeneratedMarkdownCandidate>();
+      for (const conflict of conflicts) {
+        const requested = requestedResolutions[conflict.path] ?? { action: 'keep' as const };
+        const action = requested.action;
+        conflictResolutions.push({ path: conflict.path, action });
+        if (action === 'apply') {
+          resolvedCandidates.set(conflict.path.toLowerCase(), conflict.candidate);
+          continue;
+        }
+        if (action === 'merge') {
+          if (requested.mergedMarkdown === undefined) {
+            throw new InputError(`A merged document was not supplied for ${conflict.path}.`);
+          }
+          const markdown = updateGeneratedDocumentBaseline(requested.mergedMarkdown);
+          const parsed = parseMarkdownDocument(markdown, conflict.path);
+          resolvedCandidates.set(conflict.path.toLowerCase(), {
+            ...conflict.candidate,
+            frontmatter: parsed.metadata.type === 'document' ? parsed.metadata : conflict.candidate.frontmatter,
+            markdown,
+          });
+          continue;
+        }
+        if (action !== 'keep' && action !== 'exclude') {
+          throw new InputError(`An unsupported conflict action was supplied for ${conflict.path}.`);
+        }
+      }
+      const conflictKeys = new Set(conflicts.map(({ path }) => path.toLowerCase()));
+      committedCandidates = validatedCandidates.flatMap((candidate) => {
+        const key = candidate.path.toLowerCase();
+        if (!conflictKeys.has(key)) return [candidate];
+        const resolved = resolvedCandidates.get(key);
+        return resolved === undefined ? [] : [resolved];
+      });
+    }
+
+    if (incremental && committedCandidates.length > 0) {
+      const committedHierarchy = selectHierarchyByPaths(
+        hierarchy,
+        new Set(committedCandidates.map(({ path }) => path.toLowerCase())),
+      );
+      committedCandidates = assertValidGeneratedDocuments(committedCandidates, committedHierarchy, sections);
+    }
+
     emit({ stage: 'committing' });
     ensureNotCancelled();
     canCancel = false;
-    const commit = incremental
+    const commit = incremental && committedCandidates.length > 0
       ? commitGeneratedDocumentUpdates(
           options.knowledgeRoot,
-          validatedCandidates,
+          committedCandidates,
           hierarchy,
-          selectedHierarchy,
+          selectHierarchyByPaths(hierarchy, new Set(committedCandidates.map(({ path }) => path.toLowerCase()))),
           sections,
+          expectedCurrentHashes,
         )
-      : commitGeneratedDocuments(options.knowledgeRoot, validatedCandidates, hierarchy, sections);
-    emit({ stage: 'indexing' });
-    const index = rebuildProjectIndex(options.projectRoot, options.project);
+      : incremental
+        ? { created: [], updated: [], removed: [] }
+        : commitGeneratedDocuments(options.knowledgeRoot, committedCandidates, hierarchy, sections);
+    const index = committedCandidates.length > 0
+      ? (emit({ stage: 'indexing' }), rebuildProjectIndex(options.projectRoot, options.project))
+      : incremental
+        ? readProjectIndexCounts(options.projectRoot, options.project)
+        : { categories: 0, documents: 0, relations: 0 };
     if (prepared.impactPlan.removedSources.length === 0 && prepared.pendingRemovalPaths.length === 0) {
       replaceProjectSourceSnapshot(
         options.projectRoot,
@@ -412,10 +529,11 @@ export async function executePreparedKnowledgeBuild(
       sources: sources.length,
       sections: sections.length,
       categories: countNodes(hierarchy, 'category'),
-      documents: validatedCandidates.length,
-      candidates: validatedCandidates,
+      documents: committedCandidates.length,
+      candidates: committedCandidates,
       commit,
       index,
+      ...(conflictResolutions.length > 0 ? { conflictResolutions } : {}),
       ...(prepared.pendingRemovalPaths.length > 0
         ? { pendingRemovalPaths: prepared.pendingRemovalPaths }
         : {}),
@@ -471,6 +589,97 @@ function selectIncrementalDocuments(
     }
   }
   return impactPlan.documents.filter(({ id }) => selectedIds.has(id));
+}
+
+function inspectPreparedDocumentConflicts(
+  knowledgeRoot: string,
+  paths: readonly string[],
+): PreparedDocumentConflict[] {
+  const conflicts: PreparedDocumentConflict[] = [];
+  for (const path of paths) {
+    const current = readCurrentMarkdownIfPresent(knowledgeRoot, path);
+    if (current === undefined) continue;
+    const baseline = current.document.metadata.type === 'document'
+      ? current.document.metadata.generation?.baseline_hash
+      : undefined;
+    if (baseline === undefined) conflicts.push({ path, reason: 'missing-baseline' });
+    else if (hashGeneratedDocumentContent(current.sourceText) !== baseline) conflicts.push({ path, reason: 'edited' });
+  }
+  return conflicts;
+}
+
+function inspectGeneratedCandidateConflicts(
+  knowledgeRoot: string,
+  candidates: readonly GeneratedMarkdownCandidate[],
+): Array<
+  | {
+      candidate: GeneratedMarkdownCandidate;
+      currentMarkdown: string;
+      currentContentHash: string;
+      conflict: true;
+      reason: PreparedDocumentConflict['reason'];
+    }
+  | {
+      candidate: GeneratedMarkdownCandidate;
+      currentMarkdown?: string;
+      currentContentHash?: string;
+      conflict: false;
+    }
+> {
+  return candidates.map((candidate) => {
+    const current = readCurrentMarkdownIfPresent(knowledgeRoot, candidate.path);
+    if (current === undefined) return { candidate, conflict: false };
+    const currentContentHash = hashExactMarkdown(current.sourceText);
+    const baseline = current.document.metadata.type === 'document'
+      ? current.document.metadata.generation?.baseline_hash
+      : undefined;
+    if (baseline === undefined) {
+      return { candidate, currentMarkdown: current.sourceText, currentContentHash, conflict: true, reason: 'missing-baseline' };
+    }
+    if (hashGeneratedDocumentContent(current.sourceText) !== baseline) {
+      return { candidate, currentMarkdown: current.sourceText, currentContentHash, conflict: true, reason: 'edited' };
+    }
+    return { candidate, currentMarkdown: current.sourceText, currentContentHash, conflict: false };
+  });
+}
+
+function readCurrentMarkdownIfPresent(
+  knowledgeRoot: string,
+  path: string,
+): ReturnType<typeof readStoredMarkdownSource> | undefined {
+  try {
+    return readStoredMarkdownSource(knowledgeRoot, path);
+  } catch (cause) {
+    if (isMissingPathError(cause)) return undefined;
+    throw cause;
+  }
+}
+
+function isMissingPathError(cause: unknown): boolean {
+  if (typeof cause !== 'object' || cause === null) return false;
+  if ('code' in cause && cause.code === 'ENOENT') return true;
+  return 'cause' in cause && isMissingPathError(cause.cause);
+}
+
+function hashExactMarkdown(markdown: string): string {
+  return createHash('sha256').update(markdown).digest('hex');
+}
+
+function readProjectIndexCounts(projectRoot: string, project: ProjectMetadata): ProjectIndexRebuildResult {
+  const database = openProjectDatabaseReadOnly(projectRoot, project);
+  try {
+    const count = (table: 'categories' | 'documents' | 'document_relations'): number => {
+      const row = database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number };
+      return row.count;
+    };
+    return {
+      categories: count('categories'),
+      documents: count('documents'),
+      relations: count('document_relations'),
+    };
+  } finally {
+    database.close();
+  }
 }
 
 function selectHierarchyByPaths(

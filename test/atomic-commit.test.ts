@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { InputError } from '../src/errors/qlm-error.js';
-import { commitGeneratedDocuments } from '../src/knowledge/atomic-commit.js';
+import { commitGeneratedDocumentUpdates, commitGeneratedDocuments } from '../src/knowledge/atomic-commit.js';
 import type { GeneratedMarkdownCandidate } from '../src/knowledge/document-generator.js';
 import {
   GeneratedDocumentValidationError,
@@ -129,6 +129,37 @@ describe('atomic generated document commit', () => {
     expect(readdirSync(knowledgeRoot).some((name) => name.startsWith('.qlm-'))).toBe(false);
   });
 
+  it('does not replace a new file that appears at a selected target during commit', () => {
+    const knowledgeRoot = createKnowledgeRoot();
+    const externalContent = existingDocument('external-billing', 'External billing', 1);
+    const originalLinkSync = fs.linkSync;
+    let appeared = false;
+    fs.linkSync = ((stagePath: string, targetPath: string) => {
+      if (!appeared && targetPath.toString().endsWith('billing.md')) {
+        appeared = true;
+        writeFileSync(targetPath.toString(), externalContent, 'utf8');
+      }
+      originalLinkSync(stagePath, targetPath);
+    }) as typeof fs.linkSync;
+    syncBuiltinESMExports();
+    try {
+      expect(() => commitGeneratedDocumentUpdates(
+        knowledgeRoot,
+        [makeCandidate(billingNode, billingSection)],
+        hierarchy,
+        [billingNode],
+        sections,
+        new Map([['billing.md', null]]),
+      )).toThrow('A Markdown document appeared during the build: billing.md.');
+      expect(appeared).toBe(true);
+      expect(readFileSync(join(knowledgeRoot, 'billing.md'), 'utf8')).toBe(externalContent);
+      expect(readdirSync(knowledgeRoot).some((name) => name.startsWith('.qlm-'))).toBe(false);
+    } finally {
+      fs.linkSync = originalLinkSync;
+      syncBuiltinESMExports();
+    }
+  });
+
   it('restores the old document set and removes transaction artifacts after an install failure', () => {
     const knowledgeRoot = createKnowledgeRoot();
     mkdirSync(join(knowledgeRoot, 'security'), { recursive: true });
@@ -136,10 +167,10 @@ describe('atomic generated document commit', () => {
     const originalObsolete = existingDocument('obsolete', 'Obsolete', 1);
     writeFileSync(join(knowledgeRoot, 'security', 'authentication.md'), originalAuthentication, 'utf8');
     writeFileSync(join(knowledgeRoot, 'obsolete.md'), originalObsolete, 'utf8');
-    const originalRenameSync = fs.renameSync;
+    const originalLinkSync = fs.linkSync;
     let failedInstall = false;
 
-    fs.renameSync = ((oldPath: string, newPath: string) => {
+    fs.linkSync = ((oldPath: string, newPath: string) => {
       if (
         !failedInstall &&
         oldPath.toString().endsWith('.stage') &&
@@ -148,8 +179,8 @@ describe('atomic generated document commit', () => {
         failedInstall = true;
         throw new Error('simulated candidate install failure');
       }
-      originalRenameSync(oldPath, newPath);
-    }) as typeof fs.renameSync;
+      originalLinkSync(oldPath, newPath);
+    }) as typeof fs.linkSync;
     syncBuiltinESMExports();
 
     try {
@@ -169,7 +200,7 @@ describe('atomic generated document commit', () => {
       expect(existsSync(join(knowledgeRoot, 'billing.md'))).toBe(false);
       expect(readdirSync(knowledgeRoot).some((name) => name.startsWith('.qlm-'))).toBe(false);
     } finally {
-      fs.renameSync = originalRenameSync;
+      fs.linkSync = originalLinkSync;
       syncBuiltinESMExports();
     }
   });
@@ -177,18 +208,18 @@ describe('atomic generated document commit', () => {
   it('removes a newly created knowledge root when the first install fails', () => {
     const projectDirectory = createTemporaryDirectory();
     const knowledgeRoot = join(projectDirectory, 'knowledge');
-    const originalRenameSync = fs.renameSync;
+    const originalLinkSync = fs.linkSync;
     let failedInstall = false;
     const singleDocument = { ...authenticationNode, relatedDocumentIds: [] };
     const singleCategory = { ...securityCategory, children: [singleDocument] };
 
-    fs.renameSync = ((oldPath: string, newPath: string) => {
+    fs.linkSync = ((oldPath: string, newPath: string) => {
       if (!failedInstall && oldPath.toString().endsWith('.stage')) {
         failedInstall = true;
         throw new Error('simulated first install failure');
       }
-      originalRenameSync(oldPath, newPath);
-    }) as typeof fs.renameSync;
+      originalLinkSync(oldPath, newPath);
+    }) as typeof fs.linkSync;
     syncBuiltinESMExports();
 
     try {
@@ -203,7 +234,7 @@ describe('atomic generated document commit', () => {
       expect(failedInstall).toBe(true);
       expect(existsSync(knowledgeRoot)).toBe(false);
     } finally {
-      fs.renameSync = originalRenameSync;
+      fs.linkSync = originalLinkSync;
       syncBuiltinESMExports();
     }
   });

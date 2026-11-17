@@ -11,6 +11,7 @@ const generationSchema = z
     provider: z.string().min(1),
     model: z.string().min(1),
     revision: z.number().int().min(1),
+    baseline_hash: z.string().regex(/^[0-9a-f]{64}$/u).optional(),
   })
   .strict();
 

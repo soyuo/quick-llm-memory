@@ -1,4 +1,5 @@
 import { InputError } from '../errors/qlm-error.js';
+import { createHash } from 'node:crypto';
 import { ProviderError } from '../providers/provider-error.js';
 import type { AIProvider, JsonSchema } from '../providers/provider.js';
 import { z } from 'zod';
@@ -7,6 +8,7 @@ import {
   type DocumentFrontmatter,
 } from '../markdown/schema.js';
 import { stringify } from 'yaml';
+import { parseMarkdownDocument } from '../markdown/parser.js';
 import type { HierarchyNode } from './planner.js';
 import type { SourceSection } from './source.js';
 
@@ -149,8 +151,22 @@ export async function generateMarkdownDocument(
     },
   };
   const frontmatter = documentFrontmatterSchema.parse(frontmatterInput);
-  const markdown = renderCandidate(
+  const initialMarkdown = renderCandidate(
     frontmatter,
+    body,
+    generated.inferences,
+    assignedSections,
+    relatedDocuments,
+  );
+  const frontmatterWithBaseline = documentFrontmatterSchema.parse({
+    ...frontmatter,
+    generation: {
+      ...frontmatter.generation,
+      baseline_hash: hashGeneratedDocumentContent(initialMarkdown),
+    },
+  });
+  const markdown = renderCandidate(
+    frontmatterWithBaseline,
     body,
     generated.inferences,
     assignedSections,
@@ -160,9 +176,38 @@ export async function generateMarkdownDocument(
   return {
     documentId: options.node.id,
     path: options.node.path,
-    frontmatter,
+    frontmatter: frontmatterWithBaseline,
     markdown,
   };
+}
+
+/** Hash generated document content while excluding its self-referential baseline field. */
+export function hashGeneratedDocumentContent(markdown: string): string {
+  const parsed = parseMarkdownDocument(markdown, '<generated-document>');
+  if (parsed.metadata.type !== 'document') {
+    throw new InputError('Generated document baselines require document frontmatter.');
+  }
+  const { generation, ...metadata } = parsed.metadata;
+  const { baseline_hash: _baselineHash, ...generationMetadata } = generation ?? {};
+  const content = JSON.stringify({
+    metadata: generation === undefined ? metadata : { ...metadata, generation: generationMetadata },
+    body: parsed.body,
+  });
+  return createHash('sha256').update(content).digest('hex');
+}
+
+/** Set the baseline for an edited, validated merge candidate. */
+export function updateGeneratedDocumentBaseline(markdown: string): string {
+  const parsed = parseMarkdownDocument(markdown, '<generated-document-merge>');
+  if (parsed.metadata.type !== 'document' || parsed.metadata.generation === undefined) {
+    throw new InputError('A merged document must retain generated document metadata.');
+  }
+  const baseline_hash = hashGeneratedDocumentContent(markdown);
+  const frontmatter = documentFrontmatterSchema.parse({
+    ...parsed.metadata,
+    generation: { ...parsed.metadata.generation, baseline_hash },
+  });
+  return `---\n${stringify(frontmatter).trimEnd()}\n---${parsed.body}`;
 }
 
 export interface DocumentGenerationPromptInput {

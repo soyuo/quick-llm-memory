@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import {
   lstatSync,
+  linkSync,
   mkdirSync,
+  readFileSync,
   renameSync,
   rmdirSync,
   unlinkSync,
@@ -61,6 +64,7 @@ export function commitGeneratedDocumentUpdates(
   fullHierarchy: readonly HierarchyNode[],
   selectedHierarchy: readonly HierarchyNode[],
   sections: readonly SourceSection[],
+  expectedCurrentHashes?: ReadonlyMap<string, string | null>,
 ): GeneratedDocumentCommitResult {
   return commitGeneratedDocumentSet(
     knowledgeRoot,
@@ -69,6 +73,7 @@ export function commitGeneratedDocumentUpdates(
     selectedHierarchy,
     sections,
     false,
+    expectedCurrentHashes,
   );
 }
 
@@ -79,6 +84,7 @@ function commitGeneratedDocumentSet(
   validationHierarchy: readonly HierarchyNode[],
   sections: readonly SourceSection[],
   replaceSet: boolean,
+  expectedCurrentHashes?: ReadonlyMap<string, string | null>,
 ): GeneratedDocumentCommitResult {
   const validatedHierarchy = assertValidKnowledgeHierarchy(fullHierarchy, sections);
   const orderedCandidates = assertValidGeneratedDocuments(
@@ -174,6 +180,16 @@ function commitGeneratedDocumentSet(
       const backupPath = join(root, `.qlm-${transactionId}-${backups.length}.backup`);
       renameSync(originalPath, backupPath);
       backups.push({ originalPath, backupPath });
+      const expectedHash = getExpectedHash(expectedCurrentHashes, document.path);
+      if (expectedHash.found) {
+        const actualHash = createHash('sha256').update(readFileSync(backupPath)).digest('hex');
+        if (expectedHash.value === null || actualHash !== expectedHash.value) {
+          throw new InputError(
+            `The document changed after conflict review: ${document.path}.`,
+            { suggestedAction: 'Review the current document again before applying generated content.' },
+          );
+        }
+      }
     }
 
     for (let index = 0; index < orderedCandidates.length; index += 1) {
@@ -185,8 +201,18 @@ function commitGeneratedDocumentSet(
       const targetPath = resolveUnderRoot(root, candidate.path);
       ensureParentDirectories(root, candidate.path, createdDirectories);
       assertNoSymlinkComponents(root, targetPath);
-      renameSync(stagePath, targetPath);
+      try {
+        linkSync(stagePath, targetPath);
+      } catch (cause) {
+        if (isAlreadyExistsError(cause)) {
+          throw new InputError(`A Markdown document appeared during the build: ${candidate.path}.`, {
+            suggestedAction: 'Review the new document and run the incremental build again.',
+          });
+        }
+        throw cause;
+      }
       installedPaths.push(targetPath);
+      unlinkSync(stagePath);
     }
 
     const cleanupErrors = cleanupBackupFiles(backups);
@@ -224,6 +250,21 @@ function commitGeneratedDocumentSet(
         : 'Restore files from the listed recovery paths before retrying.',
     });
   }
+}
+
+function isAlreadyExistsError(cause: unknown): boolean {
+  return typeof cause === 'object' && cause !== null && 'code' in cause && cause.code === 'EEXIST';
+}
+
+function getExpectedHash(
+  expectedHashes: ReadonlyMap<string, string | null> | undefined,
+  path: string,
+): { found: false } | { found: true; value: string | null } {
+  if (expectedHashes === undefined) return { found: false };
+  for (const [expectedPath, value] of expectedHashes) {
+    if (expectedPath.toLowerCase() === path.toLowerCase()) return { found: true, value };
+  }
+  return { found: false };
 }
 
 function flattenDocuments(tree: KnowledgeTree): DocumentTreeNode[] {
