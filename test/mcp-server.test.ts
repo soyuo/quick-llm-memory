@@ -158,8 +158,14 @@ describe('MCP server bootstrap', () => {
     await expect(serveMcpHttp({ host: '0.0.0.0', port: 0, allowRemote: true, confirmRemoteExposure: true }))
       .rejects.toThrow('explicit allowed Host and Origin lists');
     await expect(serveMcpHttp({ host: '0.0.0.0', port: 0, allowRemote: true, confirmRemoteExposure: true,
-      allowedHosts: ['bad host'], allowedOrigins: ['example.com'] }))
+      allowedHosts: ['bad host'], allowedOrigins: ['example.com'], bearerToken: 'test-secret-token-for-mcp-http-auth-0001' }))
       .rejects.toThrow('Invalid allowed Host hostname');
+    await expect(serveMcpHttp({ host: '0.0.0.0', port: 0, allowRemote: true, confirmRemoteExposure: true,
+      allowedHosts: ['example.com'], allowedOrigins: ['example.com'] }))
+      .rejects.toThrow('QLM_MCP_HTTP_BEARER_TOKEN');
+    await expect(serveMcpHttp({ host: '0.0.0.0', port: 0, allowRemote: true, confirmRemoteExposure: true,
+      allowedHosts: ['example.com'], allowedOrigins: ['example.com'], bearerToken: 'short' }))
+      .rejects.toThrow('at least 32 characters');
     await expect(serveMcpHttp({ host: '127.0.0.1', port: 65_536 }))
       .rejects.toThrow('Invalid MCP HTTP port');
   });
@@ -171,6 +177,7 @@ describe('MCP server bootstrap', () => {
       host: '0.0.0.0', port: 0, allowRemote: true, confirmRemoteExposure: true,
       allowedHosts: ['127.0.0.1'], allowedOrigins: ['trusted.example'],
       dataRoot,
+      bearerToken: 'test-secret-token-for-mcp-http-auth-0001',
     });
     const url = `http://127.0.0.1:${server.port}/mcp`;
     const trustedHeaders = {
@@ -178,6 +185,7 @@ describe('MCP server bootstrap', () => {
       origin: 'https://trusted.example',
       'content-type': 'application/json',
       accept: 'application/json, text/event-stream',
+      authorization: 'Bearer test-secret-token-for-mcp-http-auth-0001',
     };
     try {
       const initialized = await requestJson(url, trustedHeaders, {
@@ -187,8 +195,12 @@ describe('MCP server bootstrap', () => {
       expect(initialized.status).not.toBe(403);
       const toolCall = { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'memory_list_projects', arguments: {} } };
       const allowed = await requestJson(url, trustedHeaders, toolCall);
-      expect(allowed.status).not.toBe(403);
+      expect(allowed.status).toBe(200);
       expect(allowed.body).toContain('sensitive-project');
+      const unauthorized = await requestJson(url, { ...trustedHeaders, authorization: 'Bearer wrong-token' }, toolCall);
+      expect(unauthorized.status).toBe(401);
+      expect(unauthorized.body).not.toContain('sensitive-project');
+      expect(unauthorized.body).not.toContain('wrong-token');
       const hostileOrigin = await requestJson(url, { ...trustedHeaders, origin: 'https://evil.example' }, toolCall);
       expect(hostileOrigin.status).toBe(403);
       expect(hostileOrigin.body).not.toContain('sensitive-project');
@@ -327,6 +339,8 @@ describe('MCP server bootstrap', () => {
   });
 
   it('starts HTTP with loopback defaults and reports the endpoint on stderr', async () => {
+    const previousToken = process.env.QLM_MCP_HTTP_BEARER_TOKEN;
+    process.env.QLM_MCP_HTTP_BEARER_TOKEN = 'test-secret-token-for-mcp-http-auth-0001';
     let shutdown: (() => Promise<void>) | undefined;
     const close = vi.fn(async () => {});
     const serveHttp = vi.fn(async ({ host = '127.0.0.1', port = 8765 }: {
@@ -351,10 +365,12 @@ describe('MCP server bootstrap', () => {
         },
       },
     );
+    if (previousToken === undefined) delete process.env.QLM_MCP_HTTP_BEARER_TOKEN;
+    else process.env.QLM_MCP_HTTP_BEARER_TOKEN = previousToken;
 
     expect(exitCode).toBe(0);
     expect(serveHttp).toHaveBeenCalledWith({ host: '127.0.0.1', port: 8765, allowRemote: false,
-      confirmRemoteExposure: false, allowedHosts: [], allowedOrigins: [] });
+      confirmRemoteExposure: false, allowedHosts: [], allowedOrigins: [], bearerToken: 'test-secret-token-for-mcp-http-auth-0001' });
     expect(errors.join('')).toContain('http://127.0.0.1:8765/mcp');
     await shutdown?.();
     expect(close).toHaveBeenCalledOnce();
