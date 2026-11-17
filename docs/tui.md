@@ -57,3 +57,7 @@ Installing from source builds the small native helper used to publish project tr
 | q or Ctrl+C | Quit |
 
 At 100 columns by 24 rows or larger, navigation and content appear side by side. Narrower terminals use a single-column layout. Terminals below 60 columns or 16 rows show a resize prompt. Ink observes terminal resize events and rerenders the layout. Selection and focus use text markers so state does not depend on color.
+
+## Deterministic workflow verification
+
+Run `npx vitest run test/tui-workflows.test.tsx` to exercise project creation, build preview and confirmation, generation progress, document browsing, search, MCP connection guidance, and terminal resizing with local fixtures. The fake provider and MCP check make no network requests and require no provider credentials. The success flow creates `e2e-project` with `notes.md`; the failure flow displays the fixture error and leaves the project's knowledge directory and database absent.
