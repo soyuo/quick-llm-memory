@@ -452,12 +452,28 @@ export function BuildWizard({
 
 function HierarchyPreview({ prepared }: { prepared: PreparedKnowledgeBuild | undefined }): React.JSX.Element {
   const lines = prepared === undefined ? [] : renderHierarchy(prepared.hierarchy);
+  const changes = prepared === undefined ? [] : [
+    ...prepared.sourceChanges.files.map((change) => ({
+      key: `file:${change.sourceId}`,
+      text: `[${capitalize(change.status)}] source file: ${change.path}`,
+    })),
+    ...prepared.sourceChanges.sections.map((change) => ({
+      key: `section:${change.sectionId}`,
+      text: `[${capitalize(change.status)}] section: ${change.sourcePath} (${change.sectionId})`,
+    })),
+  ];
   return (
     <Box flexDirection="column">
-      <Text>{prepared?.sources.length ?? 0} source(s), {prepared?.sections.length ?? 0} section(s); proposed structure:</Text>
+      <Text>{prepared?.sources.length ?? 0} source(s), {prepared?.sections.length ?? 0} section(s); source changes:</Text>
+      {changes.map((change) => <Text key={change.key}>{change.text}</Text>)}
+      <Text>Proposed structure:</Text>
       {lines.length === 0 ? <Text>(no documents)</Text> : lines.map((line) => <Text key={line.key}>{line.text}</Text>)}
     </Box>
   );
+}
+
+function capitalize(value: string): string {
+  return value[0]?.toUpperCase() + value.slice(1);
 }
 
 function renderHierarchy(
