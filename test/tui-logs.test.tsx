@@ -1,7 +1,7 @@
 import React from 'react';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { render } from 'ink-testing-library';
 import { resolveLogFilePath } from '../src/logging/logger.js';
@@ -81,7 +81,7 @@ describe('TUI application logs', () => {
 });
 
 function createRoot(): string {
-  const root = mkdtempSync(`${tmpdir()}\\qlm-tui-logs-`);
+  const root = mkdtempSync(join(tmpdir(), 'qlm-tui-logs-'));
   roots.push(root);
   return root;
 }
