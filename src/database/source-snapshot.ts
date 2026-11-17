@@ -112,6 +112,10 @@ export function readProjectSourceSnapshotReadOnly(
 
   const database = openProjectDatabaseReadOnly(projectRoot, project);
   try {
+    const snapshotTable = database.prepare(`
+      SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'source_snapshots'
+    `).get() as { present: number } | undefined;
+    if (snapshotTable === undefined) return undefined;
     const snapshot = database
       .prepare(`
         SELECT snapshot_version
@@ -132,7 +136,16 @@ export function readProjectSourceSnapshotReadOnly(
       WHERE project_id = ? AND source_root = ?
       ORDER BY path, source_id
     `).all(project.id, sourceRoot) as SnapshotFileRow[];
-    return readSnapshotRows(database, project.id, sourceRoot, snapshot.snapshot_version, files);
+    const sectionColumns = database.prepare('PRAGMA table_info(source_snapshot_sections)').all() as Array<{ name: string }>;
+    const hasParserSectionId = sectionColumns.some(({ name }) => name === 'parser_section_id');
+    return readSnapshotRows(
+      database,
+      project.id,
+      sourceRoot,
+      snapshot.snapshot_version,
+      files,
+      hasParserSectionId,
+    );
   } finally {
     database.close();
   }
@@ -144,6 +157,7 @@ function readSnapshotRows(
   sourceRoot: string,
   snapshotVersion: number,
   files: SnapshotFileRow[],
+  hasParserSectionId = true,
 ): ProjectSourceSnapshot {
   if (snapshotVersion !== SOURCE_SNAPSHOT_VERSION) {
     throw new ConfigurationError(`The source snapshot version ${snapshotVersion} is not supported.`, {
@@ -151,7 +165,7 @@ function readSnapshotRows(
     });
   }
   const sections = database.prepare(`
-    SELECT source_id, section_id, parser_section_id, content_hash
+    SELECT source_id, section_id, ${hasParserSectionId ? 'parser_section_id' : 'NULL AS parser_section_id'}, content_hash
     FROM source_snapshot_sections
     WHERE project_id = ? AND source_root = ?
     ORDER BY source_id, section_id
