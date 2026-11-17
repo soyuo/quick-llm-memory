@@ -163,17 +163,22 @@ describe('OpenAI-compatible provider', () => {
     expect(vectors[33]).toEqual([33]);
   });
 
-  it('rejects malformed, incomplete, duplicate, non-finite, and inconsistent embeddings', async () => {
+  it('rejects malformed, incomplete, duplicate, and inconsistent embeddings', async () => {
     const responses = [
       { data: [{ index: 0, embedding: [1] }] },
       { data: [{ index: 0, embedding: [1] }, { index: 0, embedding: [2] }] },
-      { data: [{ index: 0, embedding: [1] }, { index: 1, embedding: [Number.NaN] }] },
+      { data: [{ index: 0, embedding: [1] }, { index: 1, embedding: [null] }] },
       { data: [{ index: 0, embedding: [1] }, { index: 1, embedding: [2, 3] }] },
     ];
     for (const value of responses) {
       const provider = createProvider({ fetch: async () => jsonResponse(value) });
       await expect(provider.embed(['one', 'two'], 'embedding-model')).rejects.toBeInstanceOf(ProviderError);
     }
+
+    const nonFinite = createProvider({
+      fetch: async () => new Response('{"data":[{"index":0,"embedding":[1e999]}]}'),
+    });
+    await expect(nonFinite.embed(['one'], 'embedding-model')).rejects.toBeInstanceOf(ProviderError);
 
     let request = 0;
     const crossBatchMismatch = createProvider({
