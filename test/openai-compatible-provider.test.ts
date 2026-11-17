@@ -7,6 +7,22 @@ import {
 import { ProviderError } from '../src/providers/provider-error.js';
 
 describe('OpenAI-compatible provider', () => {
+  it('exposes a credential-free cache identity for the configured endpoint', () => {
+    const first = new OpenAICompatibleProvider({
+      baseUrl: 'https://first.provider.example/v1',
+      apiKey: 'test-secret',
+    });
+    const second = new OpenAICompatibleProvider({
+      baseUrl: 'https://second.provider.example/v1',
+      apiKey: 'test-secret',
+    });
+
+    expect(first.id).toBe(second.id);
+    expect(first.cacheIdentity).not.toBe(second.cacheIdentity);
+    expect(first.cacheIdentity).not.toContain('provider.example');
+    expect(first.cacheIdentity).not.toContain('test-secret');
+  });
+
   it('lists models using the configured endpoint and bearer key', async () => {
     let requestUrl = '';
     let authorization = '';
