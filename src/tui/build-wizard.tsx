@@ -157,7 +157,7 @@ export function BuildWizard({ onCancel }: BuildWizardProps): React.JSX.Element {
   };
 
   useInput((input, key) => {
-    if (input.toLowerCase() === 'q' || (key.ctrl && input.toLowerCase() === 'c')) {
+    if (key.ctrl && input.toLowerCase() === 'c') {
       exit();
       return;
     }
@@ -167,12 +167,20 @@ export function BuildWizard({ onCancel }: BuildWizardProps): React.JSX.Element {
       return;
     }
     if (step === 'complete') {
+      if (input.toLowerCase() === 'q') {
+        exit();
+        return;
+      }
       if (key.return) onCancel();
       return;
     }
 
     const fields = STEP_FIELDS[step];
     const field = fields[fieldIndex] ?? fields[0];
+    if (input.toLowerCase() === 'q' && !isTextField(field)) {
+      exit();
+      return;
+    }
     if (key.tab) {
       setFieldIndex((index) => key.shift
         ? (index + fields.length - 1) % fields.length
@@ -286,4 +294,10 @@ function parsePositiveInteger(value: string): number | undefined {
   if (!/^\d+$/u.test(value)) return undefined;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function isTextField(field: string | undefined): field is TextField {
+  return field !== undefined && [
+    'projectName', 'sourcePath', 'model', 'minDepth', 'maxDepth', 'minTokens', 'targetTokens', 'maxTokens',
+  ].includes(field);
 }

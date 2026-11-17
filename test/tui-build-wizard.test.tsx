@@ -54,7 +54,10 @@ describe('TUI knowledge build setup wizard', () => {
     app.stdin.write('\r');
     await flushInkEffects();
     expect(app.lastFrame()).toContain('lowercase letters');
-    app.stdin.write('wizard-project');
+    app.stdin.write('q');
+    await flushInkEffects();
+    expect(app.lastFrame()).toContain('projectName: q_');
+    app.stdin.write('uick-llm');
     await flushInkEffects();
     app.stdin.write('\r');
     await flushInkEffects();
@@ -92,7 +95,7 @@ describe('TUI knowledge build setup wizard', () => {
     await flushInkEffects();
 
     expect(app.lastFrame()).toContain('Setup Ready');
-    expect(app.lastFrame()).toContain('Project: wizard-project');
+    expect(app.lastFrame()).toContain('Project: quick-llm');
     expect(app.lastFrame()).toContain('Setup validated.');
     expect(app.lastFrame()).toContain('no build was');
     expect(listProjects(dataRoot)).toEqual([]);
