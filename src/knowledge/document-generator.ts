@@ -11,6 +11,10 @@ import { stringify } from 'yaml';
 import { parseMarkdownDocument } from '../markdown/parser.js';
 import type { HierarchyNode } from './planner.js';
 import type { SourceSection } from './source.js';
+import {
+  generateStructuredWithCache,
+  type GenerationCacheOptions,
+} from './generation-cache.js';
 
 export interface DocumentGeneratorOptions {
   provider: AIProvider;
@@ -25,6 +29,7 @@ export interface DocumentGeneratorOptions {
   maxTokens?: number;
   preserveCodeBlocks?: boolean;
   preserveTables?: boolean;
+  generationCache?: GenerationCacheOptions;
   clock?: () => Date;
   signal?: AbortSignal;
 }
@@ -92,7 +97,7 @@ export async function generateMarkdownDocument(
   );
   const ancestors = options.ancestors ?? [];
 
-  const providerResult = await options.provider.generateStructured<GeneratedDocumentContent>({
+  const request = {
     model: options.model,
     systemPrompt: SYSTEM_PROMPT,
     prompt: createDocumentGenerationPrompt({
@@ -111,22 +116,30 @@ export async function generateMarkdownDocument(
     ...(options.signal === undefined ? {} : { signal: options.signal }),
     schemaName: 'qlm_generated_document_content',
     schema: GENERATED_DOCUMENT_CONTENT_SCHEMA,
+  };
+  const generated = await generateStructuredWithCache({
+    provider: options.provider,
+    request,
+    sourceContentHash: digestSourceSections(assignedSections),
+    ...(options.generationCache === undefined ? {} : { options: options.generationCache }),
+    validate: (value) => {
+      const parsed = generatedDocumentContentSchema.safeParse(value);
+      if (!parsed.success) {
+        throw new ProviderError('The provider returned malformed document content.', {
+          details: { issues: parsed.error.issues },
+        });
+      }
+      if (parsed.data.body.trim().length === 0) {
+        throw new ProviderError('The provider returned an empty document body.');
+      }
+      if (parsed.data.inferences.some((inference) => inference.trim().length === 0)) {
+        throw new ProviderError('The provider returned an empty inference.');
+      }
+      return parsed.data;
+    },
   });
-  const generatedResult = generatedDocumentContentSchema.safeParse(providerResult);
-  if (!generatedResult.success) {
-    throw new ProviderError('The provider returned malformed document content.', {
-      details: { issues: generatedResult.error.issues },
-    });
-  }
-  const generated = generatedResult.data;
 
   const body = generated.body.trim();
-  if (body.length === 0) {
-    throw new ProviderError('The provider returned an empty document body.');
-  }
-  if (generated.inferences.some((inference) => inference.trim().length === 0)) {
-    throw new ProviderError('The provider returned an empty inference.');
-  }
 
   const generatedAt = (options.clock?.() ?? new Date()).toISOString();
   const frontmatterInput = {
@@ -179,6 +192,11 @@ export async function generateMarkdownDocument(
     frontmatter: frontmatterWithBaseline,
     markdown,
   };
+}
+
+function digestSourceSections(sections: readonly SourceSection[]): string {
+  const hashes = sections.map(({ id, sourceId, hash }) => [sourceId, id, hash]);
+  return createHash('sha256').update(JSON.stringify(hashes)).digest('hex');
 }
 
 /** Hash generated document content while excluding its self-referential baseline field. */

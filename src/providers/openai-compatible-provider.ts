@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { InputError } from '../errors/qlm-error.js';
 import { ProviderError } from './provider-error.js';
 import type {
@@ -33,6 +34,7 @@ const DEFAULT_SCHEMA_NAME = 'qlm_response';
 
 export class OpenAICompatibleProvider implements AIProvider {
   readonly id: string;
+  readonly cacheIdentity: string;
 
   private readonly baseUrl: string;
   private readonly apiKey: string;
@@ -45,6 +47,7 @@ export class OpenAICompatibleProvider implements AIProvider {
     }
 
     this.id = options.id ?? 'openai-compatible';
+    this.cacheIdentity = createHash('sha256').update(baseUrl).digest('hex');
     this.baseUrl = baseUrl;
     this.apiKey = options.apiKey;
     this.fetchImplementation = options.fetch ?? globalThis.fetch;

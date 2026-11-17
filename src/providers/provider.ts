@@ -35,6 +35,8 @@ export interface TokenCount {
 
 export interface AIProvider {
   id: string;
+  /** Optional non-secret identity for endpoints/configurations sharing a provider ID. */
+  cacheIdentity?: string;
 
   listModels(): Promise<ModelInfo[]>;
 

@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -198,6 +198,34 @@ describe('Markdown document generation', () => {
     expect(request?.prompt).toContain('Security design and behavior.');
     expect(request?.prompt).not.toContain('Invoices are sent monthly.');
     expect(request?.prompt).not.toContain('section-billing');
+  });
+
+  it('reuses validated generation output from the project-scoped cache', async () => {
+    const dataRoot = mkdtempSync(join(tmpdir(), 'qlm-document-cache-'));
+    const projectRoot = join(dataRoot, 'projects', 'demo');
+    mkdirSync(projectRoot, { recursive: true });
+    const provider = new FakeProvider();
+    const options = {
+      provider,
+      model: 'test-model',
+      node: documentNode,
+      sourceSections: [assignedSection],
+      relatedDocuments: [relatedDocument],
+      generationCache: { dataRoot, projectId: 'project-123', enabled: true },
+      clock: () => new Date('2026-11-17T00:00:00.000Z'),
+    };
+
+    try {
+      const first = await generateMarkdownDocument(options);
+      const second = await generateMarkdownDocument(options);
+
+      expect(provider.requests).toHaveLength(1);
+      expect(first.markdown).toBe(second.markdown);
+      expect(readdirSync(join(dataRoot, 'cache', 'generation', 'project-123'))).toHaveLength(1);
+      expect(readdirSync(projectRoot)).toEqual([]);
+    } finally {
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
   });
 
   it('preserves source-section order from the validated document node', async () => {
