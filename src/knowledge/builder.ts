@@ -1,4 +1,5 @@
 import { realpathSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   readProjectSourceSnapshot,
   replaceProjectSourceSnapshot,
@@ -12,6 +13,7 @@ import { assertValidKnowledgeHierarchy } from './hierarchy-validator.js';
 import { MarkdownDocumentParser } from './markdown-parser.js';
 import { generateMarkdownDocument, type GeneratedMarkdownCandidate } from './document-generator.js';
 import { planKnowledgeHierarchy, type HierarchyNode } from './planner.js';
+import { planProjectKnowledgeImpact, type KnowledgeImpactPlan } from './impact-planner.js';
 import type { AIProvider } from '../providers/provider.js';
 import type { ProjectMetadata } from '../projects/schema.js';
 import { loadMarkdownSources, type SourceSection } from './source.js';
@@ -97,6 +99,7 @@ export interface PreparedKnowledgeBuild {
   hierarchy: HierarchyNode[];
   sourceSnapshot: ProjectSourceSnapshot;
   sourceChanges: SourceChangeSet;
+  impactPlan: KnowledgeImpactPlan;
 }
 
 interface PlannedDocument {
@@ -171,6 +174,12 @@ export async function prepareProjectKnowledgeBuild(
       sourceSnapshot.sourceRoot,
     );
     const sourceChanges = compareProjectSourceSnapshots(sourceSnapshot, previousSnapshot);
+    const impactPlan = planProjectKnowledgeImpact(
+      options.projectRoot,
+      options.project,
+      join(options.projectRoot, 'knowledge'),
+      sourceChanges,
+    );
 
     emit({ stage: 'planning' });
     ensureNotCancelled();
@@ -198,7 +207,7 @@ export async function prepareProjectKnowledgeBuild(
     });
     ensureNotCancelled();
 
-    return { sources, sections, hierarchy, sourceSnapshot, sourceChanges };
+    return { sources, sections, hierarchy, sourceSnapshot, sourceChanges, impactPlan };
   } catch (error) {
     if (options.signal?.aborted) {
       emit({ stage: 'cancelled' });
