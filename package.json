@@ -29,6 +29,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.4.0",
+    "@modelcontextprotocol/node": "^2.1.2",
     "@modelcontextprotocol/server": "^2.4.0",
     "better-sqlite3": "^13.2.0",
     "commander": "^15.1.0",
