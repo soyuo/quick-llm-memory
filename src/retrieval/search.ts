@@ -39,6 +39,12 @@ export type SemanticRetrievalSearchRequest = RetrievalSearchRequest & {
   embeddingModel: string;
 };
 
+export type HybridSemanticRetrievalSearchRequest = RetrievalSearchRequest & {
+  mode: 'hybrid';
+  embeddingProvider: EmbeddingProvider;
+  embeddingModel: string;
+};
+
 export interface SearchResult {
   documentId: string;
   path: string;
@@ -84,6 +90,9 @@ interface SemanticCandidate {
 
 export function searchProjectDocuments(
   request: SemanticRetrievalSearchRequest,
+): Promise<RetrievalSearchResult[]>;
+export function searchProjectDocuments(
+  request: HybridSemanticRetrievalSearchRequest,
 ): Promise<RetrievalSearchResult[]>;
 export function searchProjectDocuments(
   request: RetrievalSearchRequest & { mode: SynchronousRetrievalMode },
@@ -139,6 +148,19 @@ export function searchProjectDocuments(
     }
     if (maxResults === 0) return Promise.resolve([]);
     return searchSemanticDocuments(request as SemanticRetrievalSearchRequest, query, maxResults);
+  }
+
+  if (
+    request.mode === 'hybrid' && request.embeddingProvider !== undefined &&
+    request.embeddingModel?.trim() !== undefined && request.embeddingModel.trim().length > 0
+  ) {
+    if (maxResults === 0) return Promise.resolve([]);
+    return searchHybridDocuments(
+      request as HybridSemanticRetrievalSearchRequest,
+      query,
+      maxDepth,
+      maxResults,
+    );
   }
 
   return searchIndexedDocuments(
@@ -300,6 +322,34 @@ async function searchSemanticDocuments(
     : primaryResults;
 }
 
+async function searchHybridDocuments(
+  request: HybridSemanticRetrievalSearchRequest,
+  query: string,
+  maxDepth: number,
+  maxResults: number,
+): Promise<RetrievalSearchResult[]> {
+  let semanticResults: RetrievalSearchResult[] = [];
+  try {
+    semanticResults = await searchSemanticDocuments({
+      ...request,
+      mode: 'semantic',
+      includeRelated: false,
+      maxRelatedResults: undefined,
+    }, query, MAX_MAX_RESULTS);
+  } catch {
+    // Hybrid search retains its existing lexical behavior when embeddings are unavailable.
+  }
+
+  return searchIndexedDocuments(
+    request,
+    query,
+    maxDepth,
+    maxResults,
+    request.synchronizeStaleIndex !== false,
+    semanticResults.length === 0 ? [] : [{ mode: 'semantic', results: semanticResults }],
+  );
+}
+
 function readCurrentEmbeddingMetadata(
   request: SemanticRetrievalSearchRequest,
   model: string,
@@ -362,6 +412,7 @@ function searchIndexedDocuments(
   maxDepth: number,
   maxResults: number,
   canSynchronize: boolean,
+  additionalRankedSources: readonly RankedSearchSource[] = [],
 ): RetrievalSearchResult[] {
   const database = openProjectDatabaseReadOnly(request.projectRoot, request.project);
   let staleFullTextIndex = false;
@@ -441,7 +492,10 @@ function searchIndexedDocuments(
     return searchIndexedDocuments(request, query, maxDepth, maxResults, false);
   }
   const ranker = request.ranker ?? reciprocalRankFusionRanker;
-  const primaryResults = ranker.rank(rankedSources, maxResults).slice(0, maxResults);
+  const primaryResults = ranker.rank(
+    [...rankedSources, ...additionalRankedSources],
+    maxResults,
+  ).slice(0, maxResults);
   return request.includeRelated === true
     ? appendRelatedResults(
       request,

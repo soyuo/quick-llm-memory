@@ -8,6 +8,7 @@ import type { EmbeddingProvider } from '../src/providers/provider.js';
 import { rebuildProjectIndex, rebuildProjectIndexWithEmbeddings } from '../src/database/reindex.js';
 import { createMarkdownDocument } from '../src/markdown/repository.js';
 import { initializeProject } from '../src/projects/manager.js';
+import { reciprocalRankFusionRanker } from '../src/retrieval/ranker.js';
 import { searchProjectDocuments } from '../src/retrieval/search.js';
 
 const temporaryDirectories: string[] = [];
@@ -89,6 +90,94 @@ describe('semantic retrieval', () => {
     expect(results[0]?.score).toBe(1);
     expect(results[0]?.matchedSections).toEqual([expect.stringMatching(/^section-/)]);
     expect(results[0]?.matchedSections).not.toContain(document.documentId);
+  });
+
+  it('fuses semantic candidates with lexical sources and deduplicates documents', async () => {
+    const fixture = createProject();
+    const lexical = addDocument(
+      fixture.knowledgeRoot,
+      'security/credential-rotation.md',
+      'Credential Rotation',
+      '\n## Rotate access tokens\nRotate expired credentials.\n',
+    );
+    const semantic = addDocument(
+      fixture.knowledgeRoot,
+      'security/access-renewal.md',
+      'Access Renewal',
+      '\n## Renew permissions\nReissue permissions after review.\n',
+    );
+    const provider = new FakeEmbeddingProvider((text) => {
+      if (text === 'credential rotation') return [1, 0, 0];
+      if (/credential|rotation|rotate|token/i.test(text)) return [0, 1, 0];
+      return [1, 0, 0];
+    });
+    await rebuildProjectIndexWithEmbeddings(fixture.projectRoot, fixture.project, {
+      provider,
+      model: 'embedding-v1',
+    });
+    let rankedModes: string[] = [];
+    let semanticIds: string[] = [];
+
+    const results = await searchProjectDocuments({
+      ...fixture,
+      projectId: fixture.project.id,
+      query: 'credential rotation',
+      mode: 'hybrid',
+      embeddingProvider: provider,
+      embeddingModel: 'embedding-v1',
+      ranker: {
+        rank(sources, maxResults) {
+          rankedModes = sources.map((source) => source.mode);
+          semanticIds = sources.find((source) => source.mode === 'semantic')?.results
+            .map((result) => result.documentId) ?? [];
+          return reciprocalRankFusionRanker.rank(sources, maxResults);
+        },
+      },
+    });
+
+    expect(rankedModes).toContain('hierarchical');
+    expect(rankedModes).toContain('fulltext');
+    expect(rankedModes).toContain('semantic');
+    expect(semanticIds[0]).toBe(semantic.documentId);
+    expect(results.map(({ documentId }) => documentId)).toContain(lexical.documentId);
+    expect(results.map(({ documentId }) => documentId)).toContain(semantic.documentId);
+    expect(new Set(results.map(({ documentId }) => documentId)).size).toBe(results.length);
+    expect(results).toEqual(await searchProjectDocuments({
+      ...fixture,
+      projectId: fixture.project.id,
+      query: 'credential rotation',
+      mode: 'hybrid',
+      embeddingProvider: provider,
+      embeddingModel: 'embedding-v1',
+    }));
+  });
+
+  it('preserves lexical hybrid results when matching vectors are unavailable', async () => {
+    const fixture = createProject();
+    const lexical = addDocument(
+      fixture.knowledgeRoot,
+      'security/credential-rotation.md',
+      'Credential Rotation',
+      '\n## Rotate access tokens\nRotate expired credentials.\n',
+    );
+    const provider = new FakeEmbeddingProvider();
+    await rebuildProjectIndexWithEmbeddings(fixture.projectRoot, fixture.project, {
+      provider,
+      model: 'embedding-v1',
+    });
+    provider.calls.length = 0;
+
+    const results = await searchProjectDocuments({
+      ...fixture,
+      projectId: fixture.project.id,
+      query: 'credential rotation',
+      mode: 'hybrid',
+      embeddingProvider: provider,
+      embeddingModel: 'embedding-v2',
+    });
+
+    expect(results.map(({ documentId }) => documentId)).toContain(lexical.documentId);
+    expect(provider.calls).toHaveLength(0);
   });
 
   it('fails before provider calls when vectors are missing or use another model', async () => {
