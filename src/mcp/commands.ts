@@ -9,11 +9,16 @@ import {
   type McpStdioServerConfig,
 } from './client-config.js';
 import { serveMcpStdio } from './server.js';
+import { serveMcpHttp, type McpHttpServerHandle } from './http-server.js';
+import type { ServeMcpHttpOptions } from './http-server.js';
 
 export interface McpCommandOptions {
   serveStdio?: () => StdioServerHandle | Promise<StdioServerHandle>;
+  serveHttp?: (options: Pick<ServeMcpHttpOptions, 'host' | 'port'>) =>
+    McpHttpServerHandle | Promise<McpHttpServerHandle>;
   stdioServerConfig?: McpStdioServerConfig;
   writeOut?: (text: string) => void;
+  writeError?: (text: string) => void;
 }
 
 export function registerMcpCommands(
@@ -21,6 +26,7 @@ export function registerMcpCommands(
   options: McpCommandOptions = {},
 ): void {
   const startStdioServer = options.serveStdio ?? serveMcpStdio;
+  const startHttpServer = options.serveHttp ?? serveMcpHttp;
 
   const mcp = cli
     .command('mcp')
@@ -28,18 +34,39 @@ export function registerMcpCommands(
 
   mcp
     .command('serve')
-    .description('Serve the MCP endpoint over stdio')
+    .description('Serve the MCP endpoint over stdio or Streamable HTTP')
     .addOption(
       new Option('--transport <transport>', 'MCP transport').default('stdio'),
     )
-    .action(async ({ transport }: { transport: string }) => {
-      if (transport !== 'stdio') {
-        throw new InputError(`Unsupported MCP transport: ${transport}`, {
-          suggestedAction: 'Use --transport stdio for the Phase 5 server.',
-        });
+    .addOption(
+      new Option('--host <host>', 'HTTP bind host (loopback only in this release)')
+        .default('127.0.0.1'),
+    )
+    .addOption(
+      new Option('--port <port>', 'HTTP bind port')
+        .argParser(parseHttpPort)
+        .default(8765),
+    )
+    .action(async ({ transport, host, port }: {
+      transport: string;
+      host: string;
+      port: number;
+    }) => {
+      if (transport === 'stdio') {
+        await startStdioServer();
+        return;
       }
 
-      await startStdioServer();
+      if (transport === 'http') {
+        const handle = await startHttpServer({ host, port });
+        const writeError = options.writeError ?? ((text) => process.stderr.write(text));
+        writeError(`MCP HTTP server listening at ${handle.url}\n`);
+        return;
+      }
+
+      throw new InputError(`Unsupported MCP transport: ${transport}`, {
+        suggestedAction: 'Use --transport stdio or --transport http.',
+      });
     });
 
   mcp
@@ -66,4 +93,19 @@ export function registerMcpCommands(
 
 function isMcpClient(value: string): value is McpClient {
   return value === 'claude-code' || value === 'cursor' || value === 'vscode';
+}
+
+function parseHttpPort(value: string): number {
+  if (!/^\d+$/.test(value)) {
+    throw new InputError('Invalid MCP HTTP port.', {
+      suggestedAction: 'Choose a port between 1 and 65535.',
+    });
+  }
+  const port = Number(value);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
+    throw new InputError('Invalid MCP HTTP port.', {
+      suggestedAction: 'Choose a port between 1 and 65535.',
+    });
+  }
+  return port;
 }
