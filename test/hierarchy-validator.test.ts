@@ -164,6 +164,20 @@ describe('hierarchy validation', () => {
     expect(diagnosticCodes(validateKnowledgeHierarchy(hierarchy, sourceSections, { maxDepth: 0 }))).toContain('invalid_options');
   });
 
+  it('enforces a configured minimum document depth', () => {
+    const hierarchy = validHierarchy();
+    expect(validateKnowledgeHierarchy(hierarchy, sourceSections, { minDepth: 2, maxDepth: 4 }).valid)
+      .toBe(true);
+    expect(diagnosticCodes(validateKnowledgeHierarchy(hierarchy, sourceSections, {
+      minDepth: 3,
+      maxDepth: 4,
+    }))).toContain('min_depth_not_met');
+    expect(diagnosticCodes(validateKnowledgeHierarchy(hierarchy, sourceSections, {
+      minDepth: 4,
+      maxDepth: 3,
+    }))).toContain('invalid_options');
+  });
+
   it('uses the SPEC default maximum depth of five', () => {
     const document: HierarchyNode = {
       id: 'deep-document',

@@ -17,8 +17,12 @@ export interface DocumentGeneratorOptions {
   sourceSections: readonly SourceSection[];
   ancestors?: readonly HierarchyNode[];
   relatedDocuments?: readonly HierarchyNode[];
+  minTokens?: number;
+  targetTokens?: number;
   temperature?: number;
   maxTokens?: number;
+  preserveCodeBlocks?: boolean;
+  preserveTables?: boolean;
   clock?: () => Date;
   signal?: AbortSignal;
 }
@@ -94,6 +98,11 @@ export async function generateMarkdownDocument(
       sourceSections: assignedSections,
       ancestors,
       relatedDocuments,
+      ...(options.minTokens === undefined ? {} : { minTokens: options.minTokens }),
+      ...(options.targetTokens === undefined ? {} : { targetTokens: options.targetTokens }),
+      ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
+      ...(options.preserveCodeBlocks === undefined ? {} : { preserveCodeBlocks: options.preserveCodeBlocks }),
+      ...(options.preserveTables === undefined ? {} : { preserveTables: options.preserveTables }),
     }),
     temperature: options.temperature ?? 0,
     ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
@@ -161,6 +170,11 @@ export interface DocumentGenerationPromptInput {
   sourceSections: readonly SourceSection[];
   ancestors: readonly HierarchyNode[];
   relatedDocuments: readonly HierarchyNode[];
+  minTokens?: number;
+  targetTokens?: number;
+  maxTokens?: number;
+  preserveCodeBlocks?: boolean;
+  preserveTables?: boolean;
 }
 
 export function createDocumentGenerationPrompt(
@@ -179,11 +193,24 @@ export function createDocumentGenerationPrompt(
     })),
   };
 
+  const preferences = [
+    input.minTokens === undefined ? undefined : `Use at least ${input.minTokens} tokens when the source supports that much useful content.`,
+    input.targetTokens === undefined ? undefined : `Aim for approximately ${input.targetTokens} tokens.`,
+    input.maxTokens === undefined ? undefined : `Keep the response within ${input.maxTokens} output tokens.`,
+    input.preserveCodeBlocks === undefined ? undefined : input.preserveCodeBlocks
+      ? 'Preserve source code blocks intact; do not split or rewrite their contents.'
+      : 'Code blocks may be summarized when that preserves the source meaning.',
+    input.preserveTables === undefined ? undefined : input.preserveTables
+      ? 'Preserve source tables and their row/column relationships.'
+      : 'Tables may be summarized when that preserves the source meaning.',
+  ].filter((instruction): instruction is string => instruction !== undefined);
+
   return [
     'Create the body for the target document using only the supplied source sections.',
     'Use ancestor and related-document information only to explain organization and links; do not add unsupported facts from it.',
     'Return the body in Markdown without frontmatter or a top-level title; the application adds those deterministically.',
     'Put any useful conclusion that is not directly supported by the source sections in the inferences array, never in body as a fact.',
+    ...preferences,
     `Generation context:\n${JSON.stringify(context, null, 2)}`,
   ].join('\n\n');
 }

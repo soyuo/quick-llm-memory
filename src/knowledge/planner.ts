@@ -16,6 +16,9 @@ export interface HierarchyNode {
 export interface HierarchyPlannerOptions {
   provider: AIProvider;
   model: string;
+  minDepth?: number;
+  maxDepth?: number;
+  autoDepth?: boolean;
   temperature?: number;
   maxTokens?: number;
   signal?: AbortSignal;
@@ -84,7 +87,11 @@ export async function planKnowledgeHierarchy(
     throw new InputError('A model is required to plan the knowledge hierarchy.');
   }
 
-  const prompt = createHierarchyPlannerPrompt(sections);
+  const prompt = createHierarchyPlannerPrompt(sections, {
+    ...(options.minDepth === undefined ? {} : { minDepth: options.minDepth }),
+    ...(options.maxDepth === undefined ? {} : { maxDepth: options.maxDepth }),
+    ...(options.autoDepth === undefined ? {} : { autoDepth: options.autoDepth }),
+  });
   const response = await options.provider.generateStructured<HierarchyPlannerResponse>({
     model: options.model,
     systemPrompt: HIERARCHY_PLANNER_SYSTEM_PROMPT,
@@ -100,6 +107,7 @@ export async function planKnowledgeHierarchy(
 
 export function createHierarchyPlannerPrompt(
   sections: readonly SourceSection[],
+  settings: Pick<HierarchyPlannerOptions, 'minDepth' | 'maxDepth' | 'autoDepth'> = {},
 ): string {
   const sourceSections = sections.map((section) => ({
     id: section.id,
@@ -110,12 +118,22 @@ export function createHierarchyPlannerPrompt(
     tokenCount: section.tokenCount,
   }));
 
+  const depthInstructions = settings.minDepth === undefined || settings.maxDepth === undefined
+    ? []
+    : [
+        `Every document node must have a hierarchy depth between ${settings.minDepth} and ${settings.maxDepth}, inclusive.`,
+        settings.autoDepth === false
+          ? 'Keep the hierarchy as shallow as possible while meeting the minimum depth; add deeper levels only when needed to organize distinct topics.'
+          : 'Choose a suitable hierarchy depth based on source complexity, while staying within the configured range.',
+      ];
+
   return [
     'Organize the supplied source sections into a hierarchy of category and document nodes.',
     'Use portable relative paths with forward slashes; do not use absolute paths or parent traversal.',
     'Map every supplied source section ID to at least one document node.',
     'For each document node, set relatedDocumentIds to IDs of other related document nodes; use an empty array when there are none. Category nodes use an empty relatedDocumentIds array.',
     'Use concise descriptions that state each node purpose. Keep children as an empty array for leaf nodes.',
+    ...depthInstructions,
     `Source sections:\n${JSON.stringify(sourceSections, null, 2)}`,
   ].join('\n\n');
 }

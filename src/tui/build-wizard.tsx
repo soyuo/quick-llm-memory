@@ -43,7 +43,6 @@ export interface BuildWizardDraft {
   maxTokens: string;
   preserveCodeBlocks: boolean;
   preserveTables: boolean;
-  theme: 'light' | 'dark';
 }
 
 const STEPS: BuildWizardSetupStep[] = [
@@ -79,7 +78,6 @@ const DEFAULT_DRAFT: BuildWizardDraft = {
   maxTokens: '2000',
   preserveCodeBlocks: true,
   preserveTables: true,
-  theme: 'dark',
 };
 
 type TextField = 'projectName' | 'sourcePath' | 'model' | 'minDepth' | 'maxDepth' |
@@ -92,7 +90,7 @@ const STEP_FIELDS: Record<BuildWizardSetupStep, readonly string[]> = {
   model: ['model'],
   hierarchy: ['minDepth', 'maxDepth', 'autoDepth'],
   document: [
-    'minTokens', 'targetTokens', 'maxTokens', 'preserveCodeBlocks', 'preserveTables', 'theme',
+    'minTokens', 'targetTokens', 'maxTokens', 'preserveCodeBlocks', 'preserveTables',
   ],
 };
 
@@ -216,6 +214,18 @@ export function BuildWizard({
         project,
         provider,
         model: draft.model,
+        hierarchySettings: {
+          minDepth: Number(draft.minDepth),
+          maxDepth: Number(draft.maxDepth),
+          autoDepth: draft.autoDepth,
+        },
+        documentSettings: {
+          minTokens: Number(draft.minTokens),
+          targetTokens: Number(draft.targetTokens),
+          maxTokens: Number(draft.maxTokens),
+          preserveCodeBlocks: draft.preserveCodeBlocks,
+          preserveTables: draft.preserveTables,
+        },
         signal: analysisController.signal,
         onProgress: setProgress,
       };
@@ -333,8 +343,6 @@ export function BuildWizard({
           ...current,
           provider: current.provider === 'openai' ? 'openai-compatible' : 'openai',
         }));
-      } else if (field === 'theme') {
-        setDraft((current) => ({ ...current, theme: current.theme === 'dark' ? 'light' : 'dark' }));
       } else if (field === 'autoDepth' || field === 'preserveCodeBlocks' || field === 'preserveTables') {
         setDraft((current) => ({ ...current, [field]: !current[field] }));
       }
@@ -413,7 +421,6 @@ export function BuildWizard({
           {field('maxTokens', draft.maxTokens)}
           {toggleField('preserveCodeBlocks', draft.preserveCodeBlocks)}
           {toggleField('preserveTables', draft.preserveTables)}
-          <Text>{activeField === 'theme' ? '> ' : '  '}theme: {draft.theme}</Text>
         </>
       ) : null}
       {step === 'complete' ? (
@@ -433,7 +440,7 @@ export function BuildWizard({
           {step === 'analysis' || step === 'generation' || step === 'validation' ? (
             <Text>{progress?.stage ?? (step === 'analysis' ? 'Preparing sources and hierarchy...' : 'Starting build...')}{progress?.completed === undefined ? '' : ` (${progress.completed}/${progress.total ?? '?'})`}{progress?.message ? `: ${progress.message}` : ''}</Text>
           ) : null}
-          {step === 'failed' && error !== undefined ? <Text color="red">{error}{'\n'}Press Enter to retry or Esc to return.</Text> : null}
+          {step === 'failed' && error !== undefined ? <Text color="red">{error}{'\n'}Press Enter to return to the preview or setup.</Text> : null}
           {step !== 'failed' && error !== undefined ? <Text color="red">{error}</Text> : null}
           {STEPS.includes(step as (typeof STEPS)[number]) ? <Text>Tab changes field; arrows or Space change choices; Enter validates; Esc or Ctrl+B goes back.</Text> : null}
           {step === 'preview' ? <Text>Enter to review confirmation; Esc returns to setup.</Text> : null}
