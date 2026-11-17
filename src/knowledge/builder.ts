@@ -1,3 +1,9 @@
+import { realpathSync } from 'node:fs';
+import {
+  readProjectSourceSnapshot,
+  replaceProjectSourceSnapshot,
+  type ProjectSourceSnapshot,
+} from '../database/source-snapshot.js';
 import { rebuildProjectIndex, type ProjectIndexRebuildResult } from '../database/reindex.js';
 import { InputError, QLM_ERROR_CODES, QLMError } from '../errors/qlm-error.js';
 import { commitGeneratedDocuments, type GeneratedDocumentCommitResult } from './atomic-commit.js';
@@ -9,10 +15,16 @@ import { planKnowledgeHierarchy, type HierarchyNode } from './planner.js';
 import type { AIProvider } from '../providers/provider.js';
 import type { ProjectMetadata } from '../projects/schema.js';
 import { loadMarkdownSources, type SourceSection } from './source.js';
+import {
+  compareProjectSourceSnapshots,
+  createProjectSourceSnapshot,
+  type SourceChangeSet,
+} from './source-changes.js';
 
 export const BUILD_PROGRESS_STAGES = [
   'queued',
   'parsing',
+  'comparing',
   'planning',
   'validating',
   'awaiting_approval',
@@ -83,6 +95,8 @@ export interface PreparedKnowledgeBuild {
   sources: ReturnType<typeof loadMarkdownSources>;
   sections: SourceSection[];
   hierarchy: HierarchyNode[];
+  sourceSnapshot: ProjectSourceSnapshot;
+  sourceChanges: SourceChangeSet;
 }
 
 interface PlannedDocument {
@@ -144,6 +158,20 @@ export async function prepareProjectKnowledgeBuild(
       });
     }
 
+    emit({ stage: 'comparing' });
+    ensureNotCancelled();
+    const sourceSnapshot = createProjectSourceSnapshot(
+      realpathSync(options.sourcePath),
+      sources,
+      sections,
+    );
+    const previousSnapshot = readProjectSourceSnapshot(
+      options.projectRoot,
+      options.project,
+      sourceSnapshot.sourceRoot,
+    );
+    const sourceChanges = compareProjectSourceSnapshots(sourceSnapshot, previousSnapshot);
+
     emit({ stage: 'planning' });
     ensureNotCancelled();
     const proposedHierarchy = await planKnowledgeHierarchy(sections, {
@@ -170,7 +198,7 @@ export async function prepareProjectKnowledgeBuild(
     });
     ensureNotCancelled();
 
-    return { sources, sections, hierarchy };
+    return { sources, sections, hierarchy, sourceSnapshot, sourceChanges };
   } catch (error) {
     if (options.signal?.aborted) {
       emit({ stage: 'cancelled' });
@@ -202,7 +230,7 @@ export async function executePreparedKnowledgeBuild(
 
   try {
     ensureNotCancelled();
-    const { sources, sections, hierarchy } = prepared;
+    const { sources, sections, hierarchy, sourceSnapshot } = prepared;
     const plannedDocuments = flattenPlannedDocuments(hierarchy);
     const allDocumentNodes = plannedDocuments.map(({ node }) => node);
     const candidates: GeneratedMarkdownCandidate[] = [];
@@ -255,6 +283,12 @@ export async function executePreparedKnowledgeBuild(
     );
     emit({ stage: 'indexing' });
     const index = rebuildProjectIndex(options.projectRoot, options.project);
+    replaceProjectSourceSnapshot(
+      options.projectRoot,
+      options.project,
+      sourceSnapshot,
+      (options.clock?.() ?? new Date()).toISOString(),
+    );
 
     const result = {
       sources: sources.length,
