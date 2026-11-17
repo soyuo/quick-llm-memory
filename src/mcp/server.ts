@@ -6,6 +6,9 @@ import {
 } from '@modelcontextprotocol/server/stdio';
 import { packageMetadata } from '../package-metadata.js';
 import { resolveSettingsPaths } from '../config/paths.js';
+import { loadSettings } from '../config/settings.js';
+import { createConfiguredEmbeddingProvider } from '../providers/configured-build-provider.js';
+import type { EmbeddingProvider } from '../providers/provider.js';
 import { registerMcpTools } from './tools.js';
 import { registerMcpResources } from './resources.js';
 import { registerMcpPrompts } from './prompts.js';
@@ -17,6 +20,7 @@ export interface ServeMcpStdioOptions {
 
 export interface CreateMcpServerOptions {
   dataRoot?: string;
+  embeddingProviderFactory?: () => { provider: EmbeddingProvider; model: string };
 }
 
 export function createMcpServer(options: CreateMcpServerOptions = {}): McpServer {
@@ -24,8 +28,18 @@ export function createMcpServer(options: CreateMcpServerOptions = {}): McpServer
     name: 'quick-llm-memory',
     version: packageMetadata.version,
   });
-  const dataRoot = options.dataRoot ?? resolveSettingsPaths().dataRoot;
-  registerMcpTools(server, { dataRoot });
+  const paths = resolveSettingsPaths();
+  const dataRoot = options.dataRoot ?? paths.dataRoot;
+  registerMcpTools(server, {
+    dataRoot,
+    embeddingProviderFactory: options.embeddingProviderFactory ?? (() => {
+      const settings = loadSettings({ paths });
+      return {
+        provider: createConfiguredEmbeddingProvider(settings),
+        model: settings.ai?.embedding_model ?? 'text-embedding-3-small',
+      };
+    }),
+  });
   registerMcpResources(server, { dataRoot });
   registerMcpPrompts(server);
   return server;

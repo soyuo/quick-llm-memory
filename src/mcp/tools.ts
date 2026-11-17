@@ -7,12 +7,14 @@ import { buildKnowledgeTree } from '../markdown/tree.js';
 import { listProjects } from '../projects/manager.js';
 import { validateProjectName } from '../projects/schema.js';
 import { searchProjectDocuments } from '../retrieval/search.js';
+import type { EmbeddingProvider } from '../providers/provider.js';
 import { assertMcpOperationAllowed, resolveMcpProjectScope } from './access.js';
 import { registerMcpDocumentTools } from './document-tools.js';
 import { registerMcpKnowledgeTools } from './knowledge-tools.js';
 
 export interface RegisterMcpToolsOptions {
   dataRoot: string;
+  embeddingProviderFactory?: () => { provider: EmbeddingProvider; model: string };
 }
 
 const MAX_TREE_DEPTH = 5;
@@ -77,17 +79,18 @@ export function registerMcpTools(
       inputSchema: z.object({
         project: z.string().min(1).max(64),
         query: z.string().trim().min(1).max(500),
-        mode: z.enum(['path', 'hierarchical', 'fulltext', 'hybrid']).default('hybrid'),
+        mode: z.enum(['path', 'hierarchical', 'fulltext', 'semantic', 'hybrid']).default('hybrid'),
         maxResults: z.number().int().min(0).max(100).default(10),
         maxDepth: z.number().int().min(0).max(MAX_TREE_DEPTH).optional(),
       }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },
-    ({ project, query, mode, maxResults, maxDepth }) => {
+    async ({ project, query, mode, maxResults, maxDepth }) => {
       assertMcpOperationAllowed('read');
       try {
         const scope = resolveMcpProjectScope(options.dataRoot, project);
-        const results = searchProjectDocuments({
+        const semantic = mode === 'semantic' ? options.embeddingProviderFactory?.() : undefined;
+        const results = await searchProjectDocuments({
           projectId: scope.project.id,
           projectRoot: scope.projectRoot,
           project: scope.project,
@@ -96,6 +99,10 @@ export function registerMcpTools(
           maxResults,
           synchronizeStaleIndex: false,
           ...(maxDepth === undefined ? {} : { maxDepth }),
+          ...(semantic === undefined ? {} : {
+            embeddingProvider: semantic.provider,
+            embeddingModel: semantic.model,
+          }),
         });
         return structuredResult({ project: scope.project.name, results });
       } catch (error) {
