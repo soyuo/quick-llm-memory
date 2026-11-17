@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import {
   createDefaultMcpStdioServerConfig,
@@ -8,6 +8,12 @@ import {
 } from '../mcp/client-config.js';
 import { checkLocalMcpStdioServer, MCP_PROBE_TIMEOUT_MS } from '../mcp/stdio-probe.js';
 import { sanitizeTerminalText } from './terminal-text.js';
+import {
+  getManagedHttpServerStatus,
+  startManagedHttpServer,
+  stopManagedHttpServer,
+  type ManagedHttpServerStatus,
+} from '../mcp/process-manager.js';
 
 const CLIENTS: readonly McpClient[] = ['claude-code', 'cursor', 'vscode'];
 const LOCAL_CAPABILITIES = [
@@ -19,17 +25,25 @@ const LOCAL_CAPABILITIES = [
 ];
 
 export interface McpManagerProps {
+  dataRoot: string;
   onBack?: () => void;
   onExit?: () => void;
   probeConnection?: (signal: AbortSignal) => Promise<string[]>;
   copyText?: (text: string) => void;
+  getHttpStatus?: () => Promise<ManagedHttpServerStatus>;
+  startHttpServer?: () => Promise<ManagedHttpServerStatus>;
+  stopHttpServer?: () => Promise<ManagedHttpServerStatus>;
 }
 
 export function McpManager({
+  dataRoot,
   onBack,
   onExit,
   probeConnection = (signal) => checkLocalMcpStdioServer({ signal }),
   copyText = writeClipboardText,
+  getHttpStatus: getHttpStatusOverride,
+  startHttpServer: startHttpServerOverride,
+  stopHttpServer: stopHttpServerOverride,
 }: McpManagerProps): React.JSX.Element {
   const { exit } = useApp();
   const activeCheck = useRef<AbortController | undefined>(undefined);
@@ -39,9 +53,39 @@ export function McpManager({
     | { state: 'passed'; tools: string[] }
     | { state: 'failed'; message: string }
   >({ state: 'idle' });
+  const [httpStatus, setHttpStatus] = useState<ManagedHttpServerStatus>({
+    state: 'stopped',
+    message: 'Checking HTTP server state…',
+  });
+  const [httpAction, setHttpAction] = useState<'idle' | 'starting' | 'refreshing' | 'stopping'>('refreshing');
   const client = CLIENTS[clientIndex] ?? CLIENTS[0];
   const config = createMcpClientConfig(client, createDefaultMcpStdioServerConfig());
   const configText = formatMcpClientConfig(config);
+  const getHttpStatus = useCallback(
+    () => getHttpStatusOverride?.() ?? getManagedHttpServerStatus({ dataRoot }),
+    [dataRoot, getHttpStatusOverride],
+  );
+  const startHttp = useCallback(
+    () => startHttpServerOverride?.() ?? startManagedHttpServer({ dataRoot }),
+    [dataRoot, startHttpServerOverride],
+  );
+  const stopHttp = useCallback(
+    () => stopHttpServerOverride?.() ?? stopManagedHttpServer({ dataRoot }),
+    [dataRoot, stopHttpServerOverride],
+  );
+
+  const refreshHttpStatus = useCallback(async () => {
+    setHttpAction('refreshing');
+    try {
+      setHttpStatus(await getHttpStatus());
+    } catch {
+      setHttpStatus({ state: 'stale', message: 'Unable to verify the managed HTTP server.' });
+    } finally {
+      setHttpAction('idle');
+    }
+  }, [getHttpStatus]);
+
+  useEffect(() => { void refreshHttpStatus(); }, [refreshHttpStatus]);
 
   useEffect(() => () => activeCheck.current?.abort(), []);
 
@@ -92,12 +136,35 @@ export function McpManager({
             activeCheck.current = undefined;
           }
         });
+    } else if (input.toLowerCase() === 's' && httpAction === 'idle') {
+      setHttpAction('starting');
+      void startHttp()
+        .then(setHttpStatus)
+        .catch(() => setHttpStatus({ state: 'stale', message: 'HTTP server could not be started. Check its log.' }))
+        .finally(() => setHttpAction('idle'));
+    } else if (input.toLowerCase() === 'u' && httpAction === 'idle') {
+      void refreshHttpStatus();
+    } else if (input.toLowerCase() === 'x' && httpAction === 'idle') {
+      setHttpAction('stopping');
+      void stopHttp()
+        .then(setHttpStatus)
+        .catch(() => setHttpStatus({ state: 'stale', message: 'HTTP server could not be stopped safely.' }))
+        .finally(() => setHttpAction('idle'));
     }
   });
 
   return (
     <Box flexDirection="column">
       <Text bold>MCP Manager</Text>
+      <Text>Managed HTTP server: {httpAction === 'starting' ? 'starting…' : httpAction === 'stopping' ? 'stopping…' : httpAction === 'refreshing' ? 'checking…' : httpStatus.state}</Text>
+      {httpStatus.state === 'running' ? (
+        <>
+          <Text>URL: {httpStatus.url}</Text>
+          <Text>PID: {httpStatus.pid} · Started: {httpStatus.startedAt}</Text>
+          <Text>Log: {httpStatus.logPath}</Text>
+        </>
+      ) : <Text>{httpStatus.message}</Text>}
+      <Text>Press s to start HTTP, u to refresh status, or x to stop the verified managed process.</Text>
       <Text>Transport: stdio. The selected MCP client launches and stops its own server process.</Text>
       <Text>Connection status: client-managed; this TUI does not claim a persistent connection.</Text>
       <Text>Client: {client} (use Left/Right or Up/Down to change)</Text>

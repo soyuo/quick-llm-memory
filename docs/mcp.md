@@ -19,3 +19,14 @@ request. Multiple clients can use the endpoint concurrently, but the application
 does not retain custom per-client session state.
 
 Stop the foreground server with Ctrl+C or SIGTERM; the CLI closes the HTTP and MCP server handlers. Background start/stop/status controls are not part of this command yet.
+
+The TUI's **MCP Manager** can also start a detached loopback HTTP server, show its
+status, and stop it (`s` to start, `u` to refresh status, `x` to stop). It records
+the PID, actual server start time, host/port, command identity, and log path in
+the local data directory. Status and shutdown require a matching per-instance
+identity from the live server; missing or mismatched state is treated as stale,
+and the manager does not signal an unverifiable PID. Normal shutdown stops new
+connections and drains active work for up to five seconds; the managed server
+then closes remaining connections and exits itself. The manager sends no PID
+signal. Stdio remains client-managed and is not started or stopped by this HTTP
+process manager.

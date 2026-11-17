@@ -77,6 +77,38 @@ describe('TUI MCP Manager', () => {
 
     expect(signal?.aborted).toBe(true);
   });
+
+  it('starts, refreshes, and stops the managed HTTP server', async () => {
+    const getStatus = vi.fn(async () => ({ state: 'stopped' as const, message: 'HTTP server is stopped.' }));
+    const start = vi.fn(async () => ({
+      state: 'running' as const,
+      pid: 1234,
+      startedAt: '2026-11-17T00:00:00.000Z',
+      host: '127.0.0.1',
+      port: 8765,
+      url: 'http://127.0.0.1:8765/mcp',
+      logPath: 'C:\\qlm-data\\logs\\mcp-http.log',
+    }));
+    const stop = vi.fn(async () => ({ state: 'stopped' as const, message: 'HTTP server is stopped.' }));
+    const app = render(
+      <TuiApp dataRoot="C:\\qlm-data" mcpHttpStatus={getStatus} mcpHttpStart={start} mcpHttpStop={stop} />,
+    );
+    apps.push(app);
+
+    await openMcpManager(app);
+    await waitForFrame(app, 'Managed HTTP server: stopped');
+    app.stdin.write('s');
+    await waitForFrame(app, 'Managed HTTP server: running');
+    expect(app.lastFrame()).toContain('http://127.0.0.1:8765/mcp');
+    expect(start).toHaveBeenCalledOnce();
+
+    app.stdin.write('u');
+    await flushInkEffects();
+    expect(getStatus).toHaveBeenCalledTimes(2);
+    app.stdin.write('x');
+    await waitForFrame(app, 'Managed HTTP server: stopped');
+    expect(stop).toHaveBeenCalledOnce();
+  });
 });
 
 async function openMcpManager(app: ReturnType<typeof render>): Promise<void> {
