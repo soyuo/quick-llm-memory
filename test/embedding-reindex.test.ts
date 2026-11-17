@@ -175,6 +175,34 @@ describe('project embedding index synchronization', () => {
     expect(readFileSync(file, 'utf8')).toBe(markdownBefore);
   });
 
+  it('aborts instead of indexing a stale snapshot when Markdown changes during embedding', async () => {
+    const fixture = createProject();
+    const file = join(fixture.knowledgeRoot, 'alpha.md');
+    writeFileSync(file, document('doc-a', 'Alpha', '# Original\nOriginal text.'), 'utf8');
+    await rebuildProjectIndexWithEmbeddings(fixture.projectRoot, fixture.project, {
+      provider: new FakeEmbeddingProvider(),
+      model: 'embedding-v1',
+    });
+    const before = readIndexState(fixture.projectRoot);
+    writeFileSync(file, document('doc-a', 'Alpha', '# Planned\nPlanned text.'), 'utf8');
+    const concurrentUpdate = document('doc-a', 'Alpha', '# Concurrent\nConcurrent text.');
+    const mutatingProvider: EmbeddingProvider = {
+      id: 'fake-embeddings',
+      embed: async (texts) => {
+        writeFileSync(file, concurrentUpdate, 'utf8');
+        return texts.map(() => [0.1, 0.2, 0.3]);
+      },
+    };
+
+    await expect(rebuildProjectIndexWithEmbeddings(fixture.projectRoot, fixture.project, {
+      provider: mutatingProvider,
+      model: 'embedding-v1',
+    })).rejects.toThrow('Markdown changed while embeddings were being generated; the index was not updated.');
+
+    expect(readIndexState(fixture.projectRoot)).toEqual(before);
+    expect(readFileSync(file, 'utf8')).toBe(concurrentUpdate);
+  });
+
   it('rejects malformed vectors before creating or replacing the database', async () => {
     const fixture = createProject();
     const file = join(fixture.knowledgeRoot, 'alpha.md');
