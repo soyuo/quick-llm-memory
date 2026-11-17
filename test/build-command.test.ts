@@ -1,10 +1,11 @@
 import Database from 'better-sqlite3';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { settingsSchema } from '../src/config/schema.js';
 import { resolveProjectDatabasePath } from '../src/database/database.js';
+import { readProjectSourceSnapshot } from '../src/database/source-snapshot.js';
 import { rebuildProjectIndex } from '../src/database/reindex.js';
 import { runCli } from '../src/cli.js';
 import {
@@ -38,7 +39,7 @@ afterEach(() => {
 
 describe('qlm build command', () => {
   it('generates source-tracked documents and rebuilds the project index', async () => {
-    const { dataRoot, projectRoot } = createProject();
+    const { dataRoot, project, projectRoot } = createProject();
     const sourcePath = createSourceFile();
     const source = loadMarkdownSources(sourcePath)[0];
     if (source === undefined) {
@@ -69,6 +70,7 @@ describe('qlm build command', () => {
     expect(progressTransitions(result.output)).toEqual([
       'queued',
       'parsing',
+      'comparing',
       'planning',
       'validating',
       'awaiting_approval',
@@ -100,6 +102,33 @@ describe('qlm build command', () => {
     } finally {
       database.close();
     }
+
+    const savedSnapshot = readProjectSourceSnapshot(
+      projectRoot,
+      project,
+      realpathSync(sourcePath),
+    );
+    expect(savedSnapshot?.files).toEqual([
+      { sourceId: source.id, path: 'design.md', contentHash: source.hash },
+    ]);
+    expect(savedSnapshot?.sections).toHaveLength(parsed.sections.length);
+
+    const repeatProvider = new FakeBuildProvider(hierarchy);
+    const repeated = await prepareProjectKnowledgeBuild({
+      sourcePath,
+      projectRoot,
+      knowledgeRoot: join(projectRoot, 'knowledge'),
+      project,
+      provider: repeatProvider,
+      model: 'test-model',
+    });
+    expect(repeated.sourceChanges.files.map(({ status }) => status)).toEqual(['unchanged']);
+    expect(repeated.sourceChanges.sections.map(({ status }) => status)).toEqual(
+      parsed.sections.map(() => 'unchanged'),
+    );
+    expect(repeatProvider.requests.map(({ schemaName }) => schemaName)).toEqual([
+      'qlm_knowledge_hierarchy',
+    ]);
   });
 
   it('leaves existing Markdown and index rows untouched when hierarchy validation fails', async () => {
@@ -137,7 +166,11 @@ describe('qlm build command', () => {
     const source = loadMarkdownSources(sourcePath)[0];
     if (source === undefined) throw new Error('Expected a source fixture.');
     const parsed = await new MarkdownDocumentParser().parse(source);
-    const provider = new FakeBuildProvider(createHierarchy(parsed.sections.map(({ id }) => id)));
+    const order: string[] = [];
+    const provider = new FakeBuildProvider(
+      createHierarchy(parsed.sections.map(({ id }) => id)),
+      () => order.push('provider-request'),
+    );
     const events: BuildProgressStage[] = [];
 
     const prepared = await prepareProjectKnowledgeBuild({
@@ -147,11 +180,19 @@ describe('qlm build command', () => {
       project,
       provider,
       model: 'test-model',
-      onProgress: ({ stage }) => events.push(stage),
+      onProgress: ({ stage }) => {
+        events.push(stage);
+        order.push(stage);
+      },
     });
 
     expect(prepared.hierarchy).toHaveLength(1);
-    expect(events).toEqual(['queued', 'parsing', 'parsing', 'planning', 'validating', 'awaiting_approval']);
+    expect(prepared.sourceChanges.files.map(({ status }) => status)).toEqual(['added']);
+    expect(prepared.sourceChanges.sections.map(({ status }) => status)).toEqual(
+      parsed.sections.map(() => 'added'),
+    );
+    expect(events).toEqual(['queued', 'parsing', 'parsing', 'comparing', 'planning', 'validating', 'awaiting_approval']);
+    expect(order.indexOf('comparing')).toBeLessThan(order.indexOf('provider-request'));
     expect(provider.requests.map(({ schemaName }) => schemaName)).toEqual(['qlm_knowledge_hierarchy']);
     expect(existsSync(knowledgeRoot)).toBe(false);
     expect(existsSync(resolveProjectDatabasePath(projectRoot))).toBe(false);
@@ -343,7 +384,10 @@ class FakeBuildProvider implements AIProvider {
   readonly id = 'fake-provider';
   readonly requests: StructuredRequest<unknown>[] = [];
 
-  constructor(private readonly hierarchy: HierarchyNode[]) {}
+  constructor(
+    private readonly hierarchy: HierarchyNode[],
+    private readonly onRequest?: () => void,
+  ) {}
 
   async listModels(): Promise<ModelInfo[]> {
     return [];
@@ -355,6 +399,7 @@ class FakeBuildProvider implements AIProvider {
 
   async generateStructured<T>(request: StructuredRequest<T>): Promise<T> {
     this.requests.push(request as StructuredRequest<unknown>);
+    this.onRequest?.();
     if (request.schemaName === 'qlm_knowledge_hierarchy') {
       return { hierarchy: this.hierarchy } as T;
     }
