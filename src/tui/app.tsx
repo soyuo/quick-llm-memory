@@ -17,6 +17,7 @@ import {
 } from '../projects/transfer.js';
 import { BuildWizard } from './build-wizard.js';
 import { Explorer } from './explorer.js';
+import { Search } from './search.js';
 import { loadTuiDashboardSnapshot } from './dashboard.js';
 import type { Settings } from '../config/schema.js';
 import type { AIProvider } from '../providers/provider.js';
@@ -157,6 +158,10 @@ export function TuiApp({ columns, rows, dataRoot, onExit, buildProviderFactory }
       if (input.toLowerCase() === 'r') {
         setRefreshVersion((version) => version + 1);
       }
+      return;
+    }
+
+    if (activeScreen === 'Search') {
       return;
     }
 
@@ -554,6 +559,17 @@ export function TuiApp({ columns, rows, dataRoot, onExit, buildProviderFactory }
         <Explorer
           dataRoot={root}
           projectName={currentProjectName}
+          refreshVersion={refreshVersion}
+          onBack={() => {
+            setActiveScreen(undefined);
+            setFocusedPane('navigation');
+          }}
+          onExit={onExit}
+        />
+      ) : activeScreen === 'Search' ? (
+        <Search
+          dataRoot={root}
+          initialProjectName={currentProjectName}
           refreshVersion={refreshVersion}
           onBack={() => {
             setActiveScreen(undefined);
