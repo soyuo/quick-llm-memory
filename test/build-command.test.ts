@@ -131,6 +131,29 @@ describe('qlm build command', () => {
     ]);
   });
 
+  it('honors the setting that disables response caching for sensitive sources', async () => {
+    const { dataRoot } = createProject();
+    const sourcePath = createSourceFile();
+    const parsed = await new MarkdownDocumentParser().parse(loadMarkdownSources(sourcePath)[0]!);
+    const hierarchy = createHierarchy(parsed.sections.map(({ id }) => id));
+    const settings = settingsSchema.parse({ ai: { provider: 'openai', model: 'test-model', cache_generation: false } });
+    const firstProvider = new FakeBuildProvider(hierarchy);
+    const secondProvider = new FakeBuildProvider(hierarchy);
+
+    expect((await runBuild(dataRoot, sourcePath, { settings, providerFactory: () => firstProvider })).exitCode).toBe(0);
+    expect((await runBuild(dataRoot, sourcePath, { settings, providerFactory: () => secondProvider })).exitCode).toBe(0);
+
+    expect(firstProvider.requests.map(({ schemaName }) => schemaName)).toEqual([
+      'qlm_knowledge_hierarchy',
+      'qlm_generated_document_content',
+    ]);
+    expect(secondProvider.requests.map(({ schemaName }) => schemaName)).toEqual([
+      'qlm_knowledge_hierarchy',
+      'qlm_generated_document_content',
+    ]);
+    expect(existsSync(join(dataRoot, 'cache'))).toBe(false);
+  });
+
   it('leaves existing Markdown and index rows untouched when hierarchy validation fails', async () => {
     const { dataRoot, project, projectRoot, knowledgeRoot } = createProject();
     const sourcePath = createSourceFile();

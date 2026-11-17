@@ -93,6 +93,7 @@ export function registerProjectCommands(
             project: projectMetadata,
             provider,
             model,
+            cacheGeneration: settings.ai?.cache_generation ?? true,
             signal: controller.signal,
             onProgress: (event) => {
               const counts =
