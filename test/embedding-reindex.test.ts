@@ -82,6 +82,13 @@ describe('project embedding index synchronization', () => {
       model: 'embedding-v1',
     });
     expect(provider.calls.map((batch) => batch.length)).toEqual([32, 22]);
+    const firstRunInputs = provider.calls.flat();
+    const repeatProvider = new FakeEmbeddingProvider();
+    await rebuildProjectIndexWithEmbeddings(fixture.projectRoot, fixture.project, {
+      provider: repeatProvider,
+      model: 'embedding-v1',
+    });
+    expect(repeatProvider.calls.flat()).toEqual(firstRunInputs);
 
     const changedPath = join(fixture.knowledgeRoot, 'doc-00.md');
     const changedMarkdown = document('doc-0', 'Document 0', '# First changed\nUpdated.');
