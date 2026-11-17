@@ -5,6 +5,7 @@ import { Box, Text, useApp, useInput } from 'ink';
 import { buildKnowledgeTree, type CategoryTreeNode, type DocumentTreeNode } from '../markdown/tree.js';
 import { readStoredMarkdownDocument } from '../markdown/repository.js';
 import type { DocumentFrontmatter } from '../markdown/schema.js';
+import { sanitizeTerminalText } from './terminal-text.js';
 
 type TreeEntry =
   | { type: 'category'; node: CategoryTreeNode; parentPath: string }
@@ -260,21 +261,21 @@ export function Explorer({
     const visibleBody = bodyLines.slice(documentScroll, documentScroll + DOCUMENT_LINES);
     return (
       <Box flexDirection="column">
-        <Text bold>{safeTerminalText(document.metadata.title)}</Text>
-        <Text>Project: {safeTerminalText(projectName)} | Path: {safeTerminalText(document.path)} | ID: {safeTerminalText(document.metadata.id)}</Text>
-        <Text>Depth: {document.metadata.depth} | Status: {safeTerminalText(document.metadata.status)}</Text>
-        {document.metadata.description === undefined ? null : <Text>Description: {safeTerminalText(document.metadata.description)}</Text>}
-        {document.metadata.source_ids === undefined ? null : <Text>Sources: {safeTerminalText(document.metadata.source_ids.join(', ') || '(none)')}</Text>}
-        {document.metadata.source_sections === undefined ? null : <Text>Source sections: {safeTerminalText(document.metadata.source_sections.join(', ') || '(none)')}</Text>}
+        <Text bold>{sanitizeTerminalText(document.metadata.title)}</Text>
+        <Text>Project: {sanitizeTerminalText(projectName)} | Path: {sanitizeTerminalText(document.path)} | ID: {sanitizeTerminalText(document.metadata.id)}</Text>
+        <Text>Depth: {document.metadata.depth} | Status: {sanitizeTerminalText(document.metadata.status)}</Text>
+        {document.metadata.description === undefined ? null : <Text>Description: {sanitizeTerminalText(document.metadata.description)}</Text>}
+        {document.metadata.source_ids === undefined ? null : <Text>Sources: {sanitizeTerminalText(document.metadata.source_ids.join(', ') || '(none)')}</Text>}
+        {document.metadata.source_sections === undefined ? null : <Text>Source sections: {sanitizeTerminalText(document.metadata.source_sections.join(', ') || '(none)')}</Text>}
         <Text dimColor>Content (lines {bodyLines.length === 0 ? 0 : documentScroll + 1}-{Math.min(bodyLines.length, documentScroll + DOCUMENT_LINES)} of {bodyLines.length}):</Text>
         {visibleBody.length === 0 ? <Text>(empty document)</Text> : visibleBody.map((line, index) => (
-          <Text key={`${documentScroll + index}-${line}`}>{safeTerminalText(line) || ' '}</Text>
+          <Text key={`${documentScroll + index}-${line}`}>{sanitizeTerminalText(line) || ' '}</Text>
         ))}
         {relatedDocuments.length > 0 ? (
           <>
             <Text bold>Related documents{documentFocus === 'related' ? ' [focus]' : ''}:</Text>
             {relatedDocuments.map((related, index) => (
-              <Text key={related.id}>{index === relatedCursor ? '› ' : '  '}{safeTerminalText(related.title)} ({safeTerminalText(related.path)})</Text>
+              <Text key={related.id}>{index === relatedCursor ? '› ' : '  '}{sanitizeTerminalText(related.title)} ({sanitizeTerminalText(related.path)})</Text>
             ))}
           </>
         ) : null}
@@ -296,9 +297,9 @@ export function Explorer({
         const indent = '  '.repeat(entry.node.depth);
         if (entry.type === 'category') {
           const isExpanded = expanded.has(entry.node.path);
-          return <Text key={`category:${entry.node.path}`}>{selected ? '› ' : '  '}{indent}{isExpanded ? '▾' : '▸'} {safeTerminalText(entry.node.title)}/</Text>;
+          return <Text key={`category:${entry.node.path}`}>{selected ? '› ' : '  '}{indent}{isExpanded ? '▾' : '▸'} {sanitizeTerminalText(entry.node.title)}/</Text>;
         }
-        return <Text key={`document:${entry.node.path}`}>{selected ? '› ' : '  '}{indent}  {safeTerminalText(entry.node.title)} ({safeTerminalText(entry.node.path)})</Text>;
+        return <Text key={`document:${entry.node.path}`}>{selected ? '› ' : '  '}{indent}  {sanitizeTerminalText(entry.node.title)} ({sanitizeTerminalText(entry.node.path)})</Text>;
       })}
       {snapshot.tree?.truncated ? <Text dimColor>Tree is bounded; some entries are omitted. Reduce project size or browse a category.</Text> : null}
       {message ? <Text>{message}</Text> : null}
@@ -342,10 +343,6 @@ function collectDocuments(
 
 function writeClipboardPath(path: string): void {
   process.stdout.write(`\u001b]52;c;${Buffer.from(path).toString('base64')}\u0007`);
-}
-
-function safeTerminalText(value: string): string {
-  return value.replace(/[\u0000-\u001F\u007F-\u009F]/gu, ' ');
 }
 
 function parseEditorCommand(command: string): string[] | undefined {
