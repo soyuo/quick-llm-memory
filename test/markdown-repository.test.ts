@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -290,7 +291,9 @@ describe('Markdown document repository', () => {
 });
 
 function createKnowledgeRoot(): string {
-  const directory = mkdtempSync(join(tmpdir(), 'qlm-markdown-repository-'));
+  const directory = realpathSync(
+    mkdtempSync(join(tmpdir(), 'qlm-markdown-repository-')),
+  );
   temporaryDirectories.push(directory);
   return join(directory, 'knowledge');
 }

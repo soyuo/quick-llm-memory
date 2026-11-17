@@ -2,6 +2,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -214,7 +215,7 @@ describe('Markdown knowledge tree', () => {
 });
 
 function createKnowledgeRoot(): string {
-  const directory = mkdtempSync(join(tmpdir(), 'qlm-markdown-tree-'));
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'qlm-markdown-tree-')));
   temporaryDirectories.push(directory);
   return join(directory, 'knowledge');
 }
