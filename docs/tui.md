@@ -4,7 +4,7 @@ Run `qlm` without a subcommand in an interactive terminal to open the TUI. Exist
 
 The Dashboard shows the project count, the selected project's category and document counts, recent project/error events from a bounded log tail, and whether an MCP server is connected. Build history is marked unavailable until build events are recorded. If a project tree or project list cannot be read, the dashboard shows a generic unavailable state without a local path. In Projects, move with Up/Down and select with Enter. Press `c` to create, `n` to rename, `a` to archive or restore, and `d` to delete. Archive/restore asks for confirmation and preserves all project files. Delete requires typing the exact project name and removes only that project's directory. Press `i` to import from an existing project directory and choose a managed project name; imports assign a new project ID and update the copied index's project references. Press `e` to export the selected project directory to a new path. Both transfers reject symlinks, preserve the source, show file-copy progress, and never overwrite an existing destination. Escape cancels before the final rename. Project folders use the existing directory format with `project.yaml`, Markdown, and local index files; no archive format is introduced. Press `r` to refresh dashboard data.
 
-The shell lists Dashboard, Projects, Build, Explorer, Search, MCP Manager, Settings, and Logs. Screens that are not implemented yet show an unavailable message.
+The shell lists Dashboard, Projects, Build, Explorer, Search, MCP Manager, Settings, and Logs. Build opens a six-step setup wizard for the project name, Markdown sources, AI provider/model, hierarchy, and document settings. Each step validates before continuing, and moving backward preserves the draft. The completion screen summarizes the setup only: it does not create a project, write settings, call an AI provider, or start a build. Explorer, Search, MCP Manager, Settings, and Logs are not implemented yet and show an unavailable message.
 
 ## Native build requirements
 
@@ -23,6 +23,11 @@ Installing from source builds the small native helper used to publish project tr
 | d (Projects) | Type the project name to confirm deletion |
 | i (Projects) | Import an existing project directory |
 | e (Projects) | Export the selected project to a new directory |
+| Tab (Build wizard) | Move between setting fields |
+| Up / Down (Build wizard choices) | Change the provider or toggle setting |
+| Enter (Build wizard) | Validate and continue to the next step |
+| Esc / Ctrl+B (Build wizard) | Esc goes back a step, or leaves the first/completed screen; Ctrl+B goes back a step |
+| q (Build wizard) | Type in text fields; quits from a choice or summary screen |
 | q or Ctrl+C | Quit |
 
 At 100 columns by 24 rows or larger, navigation and content appear side by side. Narrower terminals use a single-column layout. Terminals below 60 columns or 16 rows show a resize prompt. Ink observes terminal resize events and rerenders the layout. Selection and focus use text markers so state does not depend on color.
