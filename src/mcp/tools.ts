@@ -85,7 +85,7 @@ export function registerMcpTools(
       }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },
-    async ({ project, query, mode, maxResults, maxDepth }) => {
+    async ({ project, query, mode, maxResults, maxDepth }, context) => {
       assertMcpOperationAllowed('read');
       try {
         const scope = resolveMcpProjectScope(options.dataRoot, project);
@@ -106,6 +106,7 @@ export function registerMcpTools(
           query,
           mode,
           maxResults,
+          signal: (context as typeof context & { signal?: AbortSignal }).signal,
           synchronizeStaleIndex: false,
           ...(maxDepth === undefined ? {} : { maxDepth }),
           ...(semantic === undefined ? {} : {

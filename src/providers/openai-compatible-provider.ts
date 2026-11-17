@@ -102,7 +102,7 @@ export class OpenAICompatibleProvider implements AIProvider, EmbeddingProvider {
     return { count: Math.ceil(text.length / 4), isEstimate: true };
   }
 
-  async embed(texts: string[], model: string): Promise<number[][]> {
+  async embed(texts: string[], model: string, signal?: AbortSignal): Promise<number[][]> {
     validateModel(model);
     if (texts.some((text) => typeof text !== 'string' || text.trim().length === 0)) {
       throw new InputError('Embedding inputs must be non-empty strings.');
@@ -119,6 +119,7 @@ export class OpenAICompatibleProvider implements AIProvider, EmbeddingProvider {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ model, input: batch, encoding_format: 'float' }),
+        signal,
       });
       const batchVectors = parseEmbeddingResponse(payload, batch.length);
       for (const vector of batchVectors) {

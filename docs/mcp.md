@@ -18,6 +18,14 @@ HTTP uses the SDK's stateless handler, creating a fresh MCP server for each
 request. Multiple clients can use the endpoint concurrently, but the application
 does not retain custom per-client session state.
 
+The HTTP endpoint accepts request bodies up to 1 MiB and at most 32 in-flight
+MCP requests by default. Oversized bodies receive HTTP 413; requests rejected
+at the concurrency limit receive HTTP 503. Request receipt and handler response
+are bounded by a 30-second timeout. A timeout closes the response, which cancels
+SDK request handling. Active tool callbacks are tracked separately and continue
+to count against the concurrency limit until they settle, even if the HTTP
+handler or client request has ended.
+
 Stop the foreground server with Ctrl+C or SIGTERM; the CLI closes the HTTP and MCP server handlers. Background start/stop/status controls are not part of this command yet.
 
 The TUI's **MCP Manager** can also start a detached loopback HTTP server, show its

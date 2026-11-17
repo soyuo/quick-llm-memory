@@ -10,7 +10,7 @@ import {
   toNodeHandler,
 } from '@modelcontextprotocol/node';
 import { InputError, InternalError } from '../errors/qlm-error.js';
-import { createMcpServer, type CreateMcpServerOptions } from './server.js';
+import { createMcpServer, mcpRequestSignal, type CreateMcpServerOptions } from './server.js';
 
 export interface ServeMcpHttpOptions extends CreateMcpServerOptions {
   host?: string;
@@ -21,7 +21,15 @@ export interface ServeMcpHttpOptions extends CreateMcpServerOptions {
   allowedHosts?: string[];
   allowedOrigins?: string[];
   bearerToken?: string;
+  maxRequestBodySize?: number;
+  maxConcurrentRequests?: number;
+  requestTimeoutMs?: number;
+  serverFactory?: (onToolExecutionChange?: (delta: 1 | -1) => void) => ReturnType<typeof createMcpServer>;
 }
+
+const DEFAULT_MAX_REQUEST_BODY_SIZE = 1_048_576;
+const DEFAULT_MAX_CONCURRENT_REQUESTS = 32;
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 export interface McpHttpServerHandle {
   readonly host: string;
@@ -37,6 +45,18 @@ export async function serveMcpHttp(
 ): Promise<McpHttpServerHandle> {
   const host = options.host ?? '127.0.0.1';
   const port = options.port ?? 8765;
+  const maxRequestBodySize = options.maxRequestBodySize ?? DEFAULT_MAX_REQUEST_BODY_SIZE;
+  const maxConcurrentRequests = options.maxConcurrentRequests ?? DEFAULT_MAX_CONCURRENT_REQUESTS;
+  const requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+  if (!Number.isSafeInteger(maxRequestBodySize) || maxRequestBodySize < 1) {
+    throw new InputError('MCP HTTP request body limit must be a positive safe integer.');
+  }
+  if (!Number.isSafeInteger(maxConcurrentRequests) || maxConcurrentRequests < 1) {
+    throw new InputError('MCP HTTP concurrency limit must be a positive safe integer.');
+  }
+  if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs < 1 || requestTimeoutMs > 2_147_483_647) {
+    throw new InputError('MCP HTTP request timeout must be a positive integer no greater than 2147483647.');
+  }
   const loopback = isLoopbackHost(host);
   const bearerToken = options.bearerToken;
   if (bearerToken !== undefined && (bearerToken.length < 32 || bearerToken.trim() !== bearerToken)) {
@@ -59,8 +79,17 @@ export async function serveMcpHttp(
     });
   }
 
-  const handler = createMcpHandler(() => createMcpServer(options));
-  const handleNodeRequest = toNodeHandler(handler);
+  let activeToolExecutions = 0;
+  const handler = createMcpHandler(() => {
+    if (options.serverFactory !== undefined) {
+      return options.serverFactory((delta) => { activeToolExecutions += delta; });
+    }
+    return createMcpServer({
+      ...options,
+      onToolExecutionChange: (delta) => { activeToolExecutions += delta; },
+    });
+  });
+  const handleNodeRequest = toNodeHandler(handler, { maxRequestBodySize });
   const validateHost = loopback ? localhostHostValidation() : hostHeaderValidation(allowedHosts);
   const validateOrigin = loopback ? localhostOriginValidation() : originValidation(allowedOrigins);
   const expectedTokenHash = bearerToken === undefined
@@ -74,6 +103,7 @@ export async function serveMcpHttp(
     : getCurrentCommandIdentity();
   let closePromise: Promise<void> | undefined;
   let managedCloseTimer: NodeJS.Timeout | undefined;
+  let activeMcpRequests = 0;
   const server = createServer((request, response) => {
     if (!validateHost(request, response) || !validateOrigin(request, response)) {
       return;
@@ -134,15 +164,38 @@ export async function serveMcpHttp(
       return;
     }
 
-    void handleNodeRequest(request, response).catch(() => {
+    if (activeMcpRequests >= maxConcurrentRequests || activeToolExecutions >= maxConcurrentRequests) {
+      response.writeHead(503, { 'content-type': 'application/json; charset=utf-8', connection: 'close' });
+      response.end(JSON.stringify({ error: 'MCP request capacity is temporarily exhausted.' }));
+      return;
+    }
+    activeMcpRequests += 1;
+    const requestAbort = new AbortController();
+    const handlerTimeout = setTimeout(() => {
+      requestAbort.abort(new Error('MCP request timed out.'));
+      if (response.destroyed || response.writableEnded) return;
+      if (response.headersSent) {
+        response.destroy();
+        return;
+      }
+      response.writeHead(504, { 'content-type': 'application/json; charset=utf-8', connection: 'close' });
+      response.end(JSON.stringify({ error: 'MCP request exceeded the configured time limit.' }));
+    }, requestTimeoutMs);
+
+    void mcpRequestSignal.run(requestAbort.signal, () => handleNodeRequest(request, response)).catch(() => {
       if (response.headersSent) {
         response.destroy();
         return;
       }
       response.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
       response.end('MCP request failed.\n');
+    }).finally(() => {
+      clearTimeout(handlerTimeout);
+      activeMcpRequests -= 1;
     });
   });
+  server.requestTimeout = requestTimeoutMs;
+  server.setTimeout(requestTimeoutMs, (socket) => socket.destroy());
 
   await listen(server, port, host, handler);
   const address = server.address();

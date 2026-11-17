@@ -21,6 +21,7 @@ export interface SearchRequest {
   maxDepth?: number;
   includeRelated?: boolean;
   maxRelatedResults?: number;
+  signal?: AbortSignal;
 }
 
 export interface RetrievalSearchRequest extends SearchRequest {
@@ -186,7 +187,7 @@ async function searchSemanticDocuments(
 
   let queryVectors: number[][];
   try {
-    queryVectors = await request.embeddingProvider.embed([query], model);
+    queryVectors = await request.embeddingProvider.embed([query], model, request.signal);
   } catch (cause) {
     if (cause instanceof QLMError) throw cause;
     throw new InternalError('Semantic query embedding failed.', {

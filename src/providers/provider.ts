@@ -50,7 +50,7 @@ export interface AIProvider {
 export interface EmbeddingProvider {
   id: string;
 
-  embed(texts: string[], model: string): Promise<number[][]>;
+  embed(texts: string[], model: string, signal?: AbortSignal): Promise<number[][]>;
 }
 
 export function isEmbeddingProvider(value: unknown): value is EmbeddingProvider {

@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/server';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   serveStdio,
   type ServeStdioOptions,
@@ -13,6 +14,8 @@ import { registerMcpTools } from './tools.js';
 import { registerMcpResources } from './resources.js';
 import { registerMcpPrompts } from './prompts.js';
 
+export const mcpRequestSignal = new AsyncLocalStorage<AbortSignal>();
+
 export interface ServeMcpStdioOptions {
   transport?: ServeStdioOptions['transport'];
   onError?: (error: Error) => void;
@@ -21,6 +24,7 @@ export interface ServeMcpStdioOptions {
 export interface CreateMcpServerOptions {
   dataRoot?: string;
   embeddingProviderFactory?: () => { provider: EmbeddingProvider; model: string };
+  onToolExecutionChange?: (delta: 1 | -1) => void;
 }
 
 export function createMcpServer(options: CreateMcpServerOptions = {}): McpServer {
@@ -28,6 +32,31 @@ export function createMcpServer(options: CreateMcpServerOptions = {}): McpServer
     name: 'quick-llm-memory',
     version: packageMetadata.version,
   });
+  if (options.onToolExecutionChange !== undefined) {
+    const registerTool = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
+    server.registerTool = ((...args: unknown[]) => {
+      const last = args.length - 1;
+      const callback = args[last];
+      if (typeof callback === 'function') {
+        args[last] = async (...callbackArgs: unknown[]) => {
+          options.onToolExecutionChange?.(1);
+          try {
+            const signal = mcpRequestSignal.getStore();
+            if (signal !== undefined) {
+              const context = callbackArgs[1];
+              callbackArgs[1] = typeof context === 'object' && context !== null
+                ? { ...context, signal }
+                : { signal };
+            }
+            return await callback(...callbackArgs);
+          } finally {
+            options.onToolExecutionChange?.(-1);
+          }
+        };
+      }
+      return registerTool(...args);
+    }) as typeof server.registerTool;
+  }
   const paths = resolveSettingsPaths();
   const dataRoot = options.dataRoot ?? paths.dataRoot;
   registerMcpTools(server, {
