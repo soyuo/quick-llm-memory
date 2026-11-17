@@ -30,6 +30,6 @@ jobs:
       - name: Build CLI for process lifecycle integration tests
         run: npm run build
       - name: Run tests
-        run: npm test
+        run: npm test -- --maxWorkers=2
       - name: Check types
         run: npm run typecheck
