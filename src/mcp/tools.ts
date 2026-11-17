@@ -89,7 +89,16 @@ export function registerMcpTools(
       assertMcpOperationAllowed('read');
       try {
         const scope = resolveMcpProjectScope(options.dataRoot, project);
-        const semantic = mode === 'semantic' ? options.embeddingProviderFactory?.() : undefined;
+        let semantic: { provider: EmbeddingProvider; model: string } | undefined;
+        if (mode === 'semantic') {
+          semantic = options.embeddingProviderFactory?.();
+        } else if (mode === 'hybrid' && options.embeddingProviderFactory !== undefined) {
+          try {
+            semantic = options.embeddingProviderFactory();
+          } catch {
+            // Keep the existing lexical hybrid search when embedding setup is unavailable.
+          }
+        }
         const results = await searchProjectDocuments({
           projectId: scope.project.id,
           projectRoot: scope.projectRoot,

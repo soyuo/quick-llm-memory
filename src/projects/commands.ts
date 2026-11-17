@@ -20,6 +20,7 @@ import { searchMarkdownDocuments } from '../markdown/search.js';
 import {
   searchProjectDocuments,
   type RetrievalMode,
+  type RetrievalSearchResult,
 } from '../retrieval/search.js';
 import { selectRetrievalResultsWithinTokenBudget } from '../retrieval/token-budget.js';
 import {
@@ -316,17 +317,37 @@ export function registerProjectCommands(
               'Maximum related results',
             ),
           };
-          const results = mode === 'semantic'
-            ? await searchProjectDocuments({
-                ...request,
-                mode,
-                embeddingProvider: requireEmbeddingProvider(
-                  providerFactory(runtimeSettings ?? loadSettings({ paths: resolveSettingsPaths() })),
-                ),
-                embeddingModel:
-                  runtimeSettings?.ai?.embedding_model ?? 'text-embedding-3-small',
-              })
-            : searchProjectDocuments({ ...request, mode });
+          let results: RetrievalSearchResult[];
+          if (mode === 'semantic') {
+            results = await searchProjectDocuments({
+              ...request,
+              mode,
+              embeddingProvider: requireEmbeddingProvider(
+                providerFactory(runtimeSettings ?? loadSettings({ paths: resolveSettingsPaths() })),
+              ),
+              embeddingModel:
+                runtimeSettings?.ai?.embedding_model ?? 'text-embedding-3-small',
+            });
+          } else if (mode === 'hybrid') {
+            let embeddingOptions:
+              | { embeddingProvider: EmbeddingProvider; embeddingModel: string }
+              | undefined;
+            try {
+              const settings = runtimeSettings ?? loadSettings({ paths: resolveSettingsPaths() });
+              const provider = providerFactory(settings);
+              if (isEmbeddingProvider(provider)) {
+                embeddingOptions = {
+                  embeddingProvider: provider,
+                  embeddingModel: settings.ai?.embedding_model ?? 'text-embedding-3-small',
+                };
+              }
+            } catch {
+              // Keep the existing lexical hybrid search when embedding setup is unavailable.
+            }
+            results = await searchProjectDocuments({ ...request, mode, ...embeddingOptions });
+          } else {
+            results = searchProjectDocuments({ ...request, mode });
+          }
           const tokenBudget = maxTokens === undefined
             ? undefined
             : selectRetrievalResultsWithinTokenBudget(

@@ -74,6 +74,34 @@ describe('CLI semantic search', () => {
     expect(errorOutput).toBe('');
     expect(output).toContain('security/rotation.md');
     expect(output).toContain('sections: section-');
+
+    output = '';
+    errorOutput = '';
+    const hybridCode = await runCli(
+      [
+        'node', 'qlm', 'search', 'renew secret credentials',
+        '--project', 'semantic', '--mode', 'hybrid', '--max-results', '1',
+      ],
+      {
+        writeOut: (text) => { output += text; },
+        writeError: (text) => { errorOutput += text; },
+      },
+      {
+        runtimeFactory: () => ({
+          dataRoot,
+          logger: createApplicationLogger({ dataRoot, level: 'fatal' }),
+          settings: settingsSchema.parse({
+            logging: { level: 'fatal' },
+            ai: { provider: 'openai-compatible', embedding_model: 'embedding-v1' },
+          }),
+        }),
+        providerFactory: () => provider,
+      },
+    );
+
+    expect(hybridCode).toBe(0);
+    expect(errorOutput).toBe('');
+    expect(output).toContain('security/rotation.md');
   });
 });
 
