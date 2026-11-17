@@ -5,6 +5,7 @@ import { QLMError } from '../errors/qlm-error.js';
 import type { ProjectMetadata } from '../projects/schema.js';
 import {
   openProjectDatabase,
+  openProjectDatabaseReadOnly,
   resolveProjectDatabasePath,
 } from './database.js';
 
@@ -19,6 +20,8 @@ export interface SourceSnapshotFile {
 export interface SourceSnapshotSection {
   sourceId: string;
   sectionId: string;
+  /** Parser-facing reference used by generated Markdown; absent on legacy snapshots. */
+  parserSectionId?: string;
   contentHash: string;
 }
 
@@ -41,6 +44,7 @@ interface SnapshotFileRow {
 interface SnapshotSectionRow {
   source_id: string;
   section_id: string;
+  parser_section_id: string | null;
   content_hash: string;
 }
 
@@ -87,31 +91,85 @@ export function readProjectSourceSnapshot(
         ORDER BY path, source_id
       `)
       .all(project.id, sourceRoot) as SnapshotFileRow[];
-    const sections = database
-      .prepare(`
-        SELECT source_id, section_id, content_hash
-        FROM source_snapshot_sections
-        WHERE project_id = ? AND source_root = ?
-        ORDER BY source_id, section_id
-      `)
-      .all(project.id, sourceRoot) as SnapshotSectionRow[];
-
-    return {
-      sourceRoot,
-      files: files.map(({ source_id, path, content_hash }) => ({
-        sourceId: source_id,
-        path,
-        contentHash: content_hash,
-      })),
-      sections: sections.map(({ source_id, section_id, content_hash }) => ({
-        sourceId: source_id,
-        sectionId: section_id,
-        contentHash: content_hash,
-      })),
-    };
+    return readSnapshotRows(database, project.id, sourceRoot, snapshot.snapshot_version, files);
   } finally {
     database.close();
   }
+}
+
+/** Read snapshot data without migrating, creating, or otherwise writing the project index. */
+export function readProjectSourceSnapshotReadOnly(
+  projectRoot: string,
+  project: ProjectMetadata,
+  sourceRoot: string,
+): ProjectSourceSnapshot | undefined {
+  try {
+    lstatSync(resolveProjectDatabasePath(projectRoot));
+  } catch (cause) {
+    if (isMissingPath(cause)) return undefined;
+    throw cause;
+  }
+
+  const database = openProjectDatabaseReadOnly(projectRoot, project);
+  try {
+    const snapshot = database
+      .prepare(`
+        SELECT snapshot_version
+        FROM source_snapshots
+        WHERE project_id = ? AND source_root = ?
+      `)
+      .get(project.id, sourceRoot) as SnapshotVersionRow | undefined;
+    if (snapshot === undefined) return undefined;
+    if (snapshot.snapshot_version !== SOURCE_SNAPSHOT_VERSION) {
+      throw new ConfigurationError(
+        `The source snapshot version ${snapshot.snapshot_version} is not supported.`,
+        { filePath: database.name },
+      );
+    }
+    const files = database.prepare(`
+      SELECT source_id, path, content_hash
+      FROM source_snapshot_files
+      WHERE project_id = ? AND source_root = ?
+      ORDER BY path, source_id
+    `).all(project.id, sourceRoot) as SnapshotFileRow[];
+    return readSnapshotRows(database, project.id, sourceRoot, snapshot.snapshot_version, files);
+  } finally {
+    database.close();
+  }
+}
+
+function readSnapshotRows(
+  database: ReturnType<typeof openProjectDatabase>,
+  projectId: string,
+  sourceRoot: string,
+  snapshotVersion: number,
+  files: SnapshotFileRow[],
+): ProjectSourceSnapshot {
+  if (snapshotVersion !== SOURCE_SNAPSHOT_VERSION) {
+    throw new ConfigurationError(`The source snapshot version ${snapshotVersion} is not supported.`, {
+      filePath: database.name,
+    });
+  }
+  const sections = database.prepare(`
+    SELECT source_id, section_id, parser_section_id, content_hash
+    FROM source_snapshot_sections
+    WHERE project_id = ? AND source_root = ?
+    ORDER BY source_id, section_id
+  `).all(projectId, sourceRoot) as SnapshotSectionRow[];
+  return {
+    sourceRoot,
+    files: files.map(({ source_id, path, content_hash }) => ({
+      sourceId: source_id,
+      path,
+      contentHash: content_hash,
+    })),
+    sections: sections.map(({ source_id, section_id, parser_section_id, content_hash }) => ({
+      sourceId: source_id,
+      sectionId: section_id,
+      ...(parser_section_id === null ? {} : { parserSectionId: parser_section_id }),
+      contentHash: content_hash,
+    })),
+  };
 }
 
 /** Replace one source-root snapshot and all of its hashes in one SQLite transaction. */
@@ -151,8 +209,8 @@ export function replaceProjectSourceSnapshot(
 
       const insertSection = database.prepare(`
         INSERT INTO source_snapshot_sections (
-          project_id, source_root, source_id, section_id, content_hash
-        ) VALUES (?, ?, ?, ?, ?)
+          project_id, source_root, source_id, section_id, parser_section_id, content_hash
+        ) VALUES (?, ?, ?, ?, ?, ?)
       `);
       for (const section of snapshot.sections) {
         insertSection.run(
@@ -160,6 +218,7 @@ export function replaceProjectSourceSnapshot(
           snapshot.sourceRoot,
           section.sourceId,
           section.sectionId,
+          section.parserSectionId ?? null,
           section.contentHash,
         );
       }
