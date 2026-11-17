@@ -328,6 +328,13 @@ async function searchHybridDocuments(
   maxDepth: number,
   maxResults: number,
 ): Promise<RetrievalSearchResult[]> {
+  const lexicalSources = collectIndexedSources(
+    request,
+    query,
+    maxDepth,
+    MAX_MAX_RESULTS,
+    request.synchronizeStaleIndex !== false,
+  );
   let semanticResults: RetrievalSearchResult[] = [];
   try {
     semanticResults = await searchSemanticDocuments({
@@ -340,13 +347,12 @@ async function searchHybridDocuments(
     // Hybrid search retains its existing lexical behavior when embeddings are unavailable.
   }
 
-  return searchIndexedDocuments(
+  return rankSearchSources(
     request,
-    query,
-    maxDepth,
+    semanticResults.length === 0
+      ? lexicalSources
+      : [...lexicalSources, { mode: 'semantic', results: semanticResults }],
     maxResults,
-    request.synchronizeStaleIndex !== false,
-    semanticResults.length === 0 ? [] : [{ mode: 'semantic', results: semanticResults }],
   );
 }
 
@@ -412,8 +418,37 @@ function searchIndexedDocuments(
   maxDepth: number,
   maxResults: number,
   canSynchronize: boolean,
-  additionalRankedSources: readonly RankedSearchSource[] = [],
 ): RetrievalSearchResult[] {
+  return rankSearchSources(
+    request,
+    collectIndexedSources(request, query, maxDepth, maxResults, canSynchronize),
+    maxResults,
+  );
+}
+
+function rankSearchSources(
+  request: RetrievalSearchRequest,
+  rankedSources: readonly RankedSearchSource[],
+  maxResults: number,
+): RetrievalSearchResult[] {
+  const ranker = request.ranker ?? reciprocalRankFusionRanker;
+  const primaryResults = ranker.rank(rankedSources, maxResults).slice(0, maxResults);
+  return request.includeRelated === true
+    ? appendRelatedResults(
+      request,
+      primaryResults,
+      request.maxRelatedResults ?? DEFAULT_MAX_RELATED_RESULTS,
+    )
+    : primaryResults;
+}
+
+function collectIndexedSources(
+  request: RetrievalSearchRequest,
+  query: string,
+  maxDepth: number,
+  maxResults: number,
+  canSynchronize: boolean,
+): RankedSearchSource[] {
   const database = openProjectDatabaseReadOnly(request.projectRoot, request.project);
   let staleFullTextIndex = false;
   const rankedSources: RankedSearchSource[] = [];
@@ -489,20 +524,9 @@ function searchIndexedDocuments(
       throw staleIndexError('project');
     }
     rebuildProjectIndex(request.projectRoot, request.project);
-    return searchIndexedDocuments(request, query, maxDepth, maxResults, false);
+    return collectIndexedSources(request, query, maxDepth, maxResults, false);
   }
-  const ranker = request.ranker ?? reciprocalRankFusionRanker;
-  const primaryResults = ranker.rank(
-    [...rankedSources, ...additionalRankedSources],
-    maxResults,
-  ).slice(0, maxResults);
-  return request.includeRelated === true
-    ? appendRelatedResults(
-      request,
-      primaryResults,
-      request.maxRelatedResults ?? DEFAULT_MAX_RELATED_RESULTS,
-    )
-    : primaryResults;
+  return rankedSources;
 }
 
 function appendRelatedResults(

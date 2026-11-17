@@ -180,6 +180,38 @@ describe('semantic retrieval', () => {
     expect(provider.calls).toHaveLength(0);
   });
 
+  it('repairs stale lexical indexes before checking semantic candidates', async () => {
+    const fixture = createProject();
+    const lexical = addDocument(
+      fixture.knowledgeRoot,
+      'security/credential-rotation.md',
+      'Credential Rotation',
+      '\n## Rotate access tokens\nRotate expired credentials.\n',
+    );
+    const provider = new FakeEmbeddingProvider();
+    await rebuildProjectIndexWithEmbeddings(fixture.projectRoot, fixture.project, {
+      provider,
+      model: 'embedding-v1',
+    });
+    const callsBeforeSearch = provider.calls.length;
+    writeFileSync(lexical.path, readFileSync(lexical.path, 'utf8').replace(
+      'Rotate expired credentials.',
+      'Renew expired credentials.',
+    ));
+
+    const results = await searchProjectDocuments({
+      ...fixture,
+      projectId: fixture.project.id,
+      query: 'credential rotation',
+      mode: 'hybrid',
+      embeddingProvider: provider,
+      embeddingModel: 'embedding-v1',
+    });
+
+    expect(results.map(({ documentId }) => documentId)).toContain(lexical.documentId);
+    expect(provider.calls).toHaveLength(callsBeforeSearch);
+  });
+
   it('fails before provider calls when vectors are missing or use another model', async () => {
     const missing = createProject();
     addDocument(missing.knowledgeRoot, 'security/rotation.md', 'Credential Rotation',
