@@ -202,13 +202,47 @@ describe('project SQLite database', () => {
     original.close();
 
     const migrated = openDatabase(projectRoot, project);
-    expect(migrated.pragma('user_version', { simple: true })).toBe(3);
+    expect(migrated.pragma('user_version', { simple: true })).toBe(PROJECT_DATABASE_SCHEMA_VERSION);
     expect(migrated.prepare('SELECT id, path FROM documents').get()).toEqual({
       id: 'existing-doc',
       path: 'notes.md',
     });
     expect(migrated.prepare("SELECT name FROM sqlite_schema WHERE name = 'source_snapshots'").get())
       .toEqual({ name: 'source_snapshots' });
+  });
+
+  it('adds the nullable parser section reference to version 3 snapshots without losing hashes', () => {
+    const { projectRoot, project } = createProject();
+    const original = openDatabase(projectRoot, project);
+    original.exec('ALTER TABLE source_snapshot_sections DROP COLUMN parser_section_id');
+    original.prepare(`
+      INSERT INTO source_snapshots (project_id, source_root, snapshot_version, updated_at)
+      VALUES (?, ?, 1, ?)
+    `).run(project.id, 'C:/sources', project.updated_at);
+    original.prepare(`
+      INSERT INTO source_snapshot_files (project_id, source_root, source_id, path, content_hash)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(project.id, 'C:/sources', 'source-1', 'notes.md', 'a'.repeat(64));
+    original.prepare(`
+      INSERT INTO source_snapshot_sections (project_id, source_root, source_id, section_id, content_hash)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(project.id, 'C:/sources', 'source-1', 'stable-section', 'b'.repeat(64));
+    original.pragma('user_version = 3');
+    original.close();
+
+    const migrated = openDatabase(projectRoot, project);
+    try {
+      expect(migrated.pragma('user_version', { simple: true })).toBe(PROJECT_DATABASE_SCHEMA_VERSION);
+      expect(migrated.prepare(`
+        SELECT section_id, parser_section_id, content_hash FROM source_snapshot_sections
+      `).get()).toEqual({
+        section_id: 'stable-section',
+        parser_section_id: null,
+        content_hash: 'b'.repeat(64),
+      });
+    } finally {
+      migrated.close();
+    }
   });
 
   it('refuses to promote a version 2 database with conflicting snapshot objects', () => {

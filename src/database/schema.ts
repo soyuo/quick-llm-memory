@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3';
 import { ConfigurationError } from '../config/error.js';
 import type { ProjectMetadata } from '../projects/schema.js';
 
-export const PROJECT_DATABASE_SCHEMA_VERSION = 3;
+export const PROJECT_DATABASE_SCHEMA_VERSION = 4;
 
 export function initializeProjectDatabaseSchema(
   database: Database.Database,
@@ -177,6 +177,7 @@ export function initializeProjectDatabaseSchema(
         source_root TEXT NOT NULL,
         source_id TEXT NOT NULL,
         section_id TEXT NOT NULL,
+        parser_section_id TEXT,
         content_hash TEXT NOT NULL CHECK (
           length(content_hash) = 64 AND content_hash NOT GLOB '*[^0-9a-f]*'
         ),
@@ -194,6 +195,15 @@ export function initializeProjectDatabaseSchema(
         content
       );
     `);
+
+    if (currentVersion < 4) {
+      const sectionColumns = database
+        .prepare("PRAGMA table_info('source_snapshot_sections')")
+        .all() as Array<{ name: string }>;
+      if (!sectionColumns.some(({ name }) => name === 'parser_section_id')) {
+        database.exec('ALTER TABLE source_snapshot_sections ADD COLUMN parser_section_id TEXT');
+      }
+    }
 
     if (currentVersion < PROJECT_DATABASE_SCHEMA_VERSION) {
       database.pragma(`user_version = ${PROJECT_DATABASE_SCHEMA_VERSION}`);

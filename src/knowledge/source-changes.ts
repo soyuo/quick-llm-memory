@@ -20,6 +20,8 @@ export interface SourceSectionChange {
   sourceId: string;
   sourcePath: string;
   sectionId: string;
+  previousParserSectionId: string | null;
+  currentParserSectionId: string | null;
   status: SourceChangeStatus;
   previousHash: string | null;
   currentHash: string | null;
@@ -58,6 +60,7 @@ export function createProjectSourceSnapshot(
     return {
       sourceId: section.sourceId,
       sectionId,
+      parserSectionId: `${section.sourceId}:${section.id}`,
       contentHash: section.hash,
     };
   });
@@ -112,6 +115,8 @@ export function compareProjectSourceSnapshots(
       sourcePath: sourcePaths.get(sourceId) ?? '',
       sectionId,
       status: classify(before?.contentHash, after?.contentHash),
+      previousParserSectionId: before?.parserSectionId ?? null,
+      currentParserSectionId: after?.parserSectionId ?? null,
       previousHash: before?.contentHash ?? null,
       currentHash: after?.contentHash ?? null,
     });
