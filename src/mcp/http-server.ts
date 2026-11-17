@@ -76,6 +76,9 @@ export async function serveMcpHttp(
         response.writeHead(202).end();
         managedCloseTimer = setTimeout(() => {
           server.closeAllConnections();
+          process.exitCode = 1;
+          const forceExitTimer = setTimeout(() => process.exit(1), 100);
+          forceExitTimer.unref();
         }, 5_000);
         managedCloseTimer.unref();
         setImmediate(() => {
@@ -128,7 +131,7 @@ export async function serveMcpHttp(
 
 export function getCurrentCommandIdentity(): string {
   return createHash('sha256')
-    .update(JSON.stringify([process.execPath, ...process.argv]))
+    .update(JSON.stringify([process.execPath, ...process.argv.slice(1)]))
     .digest('hex');
 }
 
