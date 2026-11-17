@@ -313,6 +313,21 @@ describe('MCP server bootstrap', () => {
     }
   });
 
+  it('rate limits invalid bearer attempts before MCP authentication', async () => {
+    const server = await serveMcpHttp({ host: '127.0.0.1', port: 0, bearerToken: 'secret-token-that-is-long-enough-123', maxRequestsPerMinute: 1 });
+    try {
+      const request = () => fetch(server.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: 'Bearer wrong', accept: 'application/json, text/event-stream' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+      });
+      expect((await request()).status).toBe(401);
+      expect((await request()).status).toBe(429);
+    } finally {
+      await server.close();
+    }
+  });
+
   it('keeps concurrent HTTP clients independent when one disconnects', async () => {
     const dataRoot = mkdtempSync(join(tmpdir(), 'qlm-mcp-concurrent-'));
     initializeProject(dataRoot, 'alpha');

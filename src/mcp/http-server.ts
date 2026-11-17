@@ -129,6 +129,14 @@ export async function serveMcpHttp(
     }
 
     const pathname = (request.url ?? '/').split('?', 1)[0];
+    if (pathname === '/mcp') {
+      const clientKey = createHash('sha256').update(request.socket.remoteAddress ?? 'unknown').digest('hex');
+      if (!rateLimiter.allow(clientKey)) {
+        response.writeHead(429, { 'content-type': 'application/json; charset=utf-8', 'retry-after': '60' });
+        response.end(JSON.stringify({ error: 'MCP request rate limit exceeded.' }));
+        return;
+      }
+    }
     if (pathname === '/mcp' && expectedTokenHash !== undefined) {
       const authorization = request.headers.authorization ?? '';
       const match = /^Bearer (\S+)$/i.exec(authorization);
@@ -183,12 +191,6 @@ export async function serveMcpHttp(
       return;
     }
 
-    const clientKey = createHash('sha256').update(request.socket.remoteAddress ?? 'unknown').digest('hex');
-    if (!rateLimiter.allow(clientKey)) {
-      response.writeHead(429, { 'content-type': 'application/json; charset=utf-8', 'retry-after': '60' });
-      response.end(JSON.stringify({ error: 'MCP request rate limit exceeded.' }));
-      return;
-    }
 
     if (activeMcpRequests >= maxConcurrentRequests || activeToolExecutions >= maxConcurrentRequests) {
       response.writeHead(503, { 'content-type': 'application/json; charset=utf-8', connection: 'close' });
