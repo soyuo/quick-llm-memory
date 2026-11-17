@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, lstatSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { ConfigurationError } from '../config/error.js';
-import { InternalError, QLMError } from '../errors/qlm-error.js';
+import { InputError, InternalError, QLMError } from '../errors/qlm-error.js';
 import {
   readStoredMarkdownSource,
   resolveKnowledgeRoot,
@@ -16,6 +16,10 @@ import {
 } from '../markdown/tree.js';
 import type { DocumentFrontmatter } from '../markdown/schema.js';
 import type { ProjectMetadata } from '../projects/schema.js';
+import { extractMarkdownSections } from '../knowledge/markdown-parser.js';
+import type { SourceDocument } from '../knowledge/source.js';
+import { ProviderError } from '../providers/provider-error.js';
+import type { EmbeddingProvider } from '../providers/provider.js';
 import { openProjectDatabase } from './database.js';
 
 interface IndexedCategory {
@@ -40,10 +44,71 @@ export interface ProjectIndexRebuildResult {
   relations: number;
 }
 
+export interface ProjectEmbeddingSyncOptions {
+  provider: EmbeddingProvider;
+  model: string;
+}
+
+interface PreparedProjectIndex {
+  categories: IndexedCategory[];
+  documents: IndexedDocument[];
+  relations: Array<{ sourceId: string; targetId: string; relationType: string }>;
+}
+
+interface PreparedEmbedding {
+  documentId: string;
+  kind: 'document' | 'section';
+  sectionId: string;
+  sourceHash: string;
+  vector: number[];
+}
+
+interface StoredEmbeddingSnapshot {
+  metadata: {
+    provider_id: string;
+    model: string;
+    dimensions: number;
+    updated_at: string;
+  };
+  rows: Array<{
+    document_id: string;
+    kind: 'document' | 'section';
+    section_id: string;
+    source_hash: string;
+    model: string;
+    dimensions: number;
+    vector_json: string;
+  }>;
+}
+
 export function rebuildProjectIndex(
   projectRoot: string,
   project: ProjectMetadata,
 ): ProjectIndexRebuildResult {
+  const index = prepareProjectIndex(projectRoot, project);
+  return commitProjectIndex(projectRoot, project, index);
+}
+
+/** Generate all document/section vectors before the atomic index replacement. */
+export async function rebuildProjectIndexWithEmbeddings(
+  projectRoot: string,
+  project: ProjectMetadata,
+  embedding: ProjectEmbeddingSyncOptions,
+): Promise<ProjectIndexRebuildResult> {
+  const index = prepareProjectIndex(projectRoot, project);
+  if (embedding.model.trim().length === 0) {
+    throw new InputError('Embedding model must not be empty.');
+  }
+  const prepared = await createProjectEmbeddings(index.documents, embedding);
+  return commitProjectIndex(projectRoot, project, index, {
+    providerId: embedding.provider.id,
+    model: embedding.model,
+    dimensions: prepared.dimensions,
+    rows: prepared.rows,
+  });
+}
+
+function prepareProjectIndex(projectRoot: string, project: ProjectMetadata): PreparedProjectIndex {
   const knowledgeRoot = join(projectRoot, 'knowledge');
   const tree = buildKnowledgeTree(knowledgeRoot);
   const canonicalKnowledgeRoot = existsSync(resolve(knowledgeRoot))
@@ -74,9 +139,22 @@ export function rebuildProjectIndex(
     })),
   );
 
+  return { categories, documents, relations };
+}
+
+function commitProjectIndex(
+  projectRoot: string,
+  project: ProjectMetadata,
+  { categories, documents, relations }: PreparedProjectIndex,
+  embedding?: { providerId: string; model: string; dimensions?: number; rows: PreparedEmbedding[] },
+): ProjectIndexRebuildResult {
   const database = openProjectDatabase(projectRoot, project);
   try {
     const rebuild = database.transaction(() => {
+      const preservedEmbeddings = embedding === undefined
+        ? captureUnchangedEmbeddings(database, project.id, documents)
+        : undefined;
+      database.prepare('DELETE FROM project_embedding_metadata WHERE project_id = ?').run(project.id);
       database.prepare('DELETE FROM document_relations').run();
       database.prepare('DELETE FROM document_fts').run();
       database.prepare('DELETE FROM documents WHERE project_id = ?').run(project.id);
@@ -141,6 +219,46 @@ export function rebuildProjectIndex(
       for (const relation of relations) {
         insertRelation.run(relation);
       }
+
+      if (embedding !== undefined && embedding.dimensions !== undefined) {
+        database.prepare(`
+          INSERT INTO project_embedding_metadata (project_id, provider_id, model, dimensions, updated_at)
+          VALUES (?, ?, ?, ?, ?)
+        `).run(project.id, embedding.providerId, embedding.model, embedding.dimensions, project.updated_at);
+        const insertEmbedding = database.prepare(`
+          INSERT INTO document_embeddings (
+            project_id, document_id, kind, section_id, source_hash, model, dimensions, vector_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        for (const row of embedding.rows) {
+          insertEmbedding.run(
+            project.id, row.documentId, row.kind, row.sectionId, row.sourceHash,
+            embedding.model, embedding.dimensions, JSON.stringify(row.vector),
+          );
+        }
+      } else if (preservedEmbeddings !== undefined) {
+        database.prepare(`
+          INSERT INTO project_embedding_metadata (project_id, provider_id, model, dimensions, updated_at)
+          VALUES (?, ?, ?, ?, ?)
+        `).run(
+          project.id,
+          preservedEmbeddings.metadata.provider_id,
+          preservedEmbeddings.metadata.model,
+          preservedEmbeddings.metadata.dimensions,
+          preservedEmbeddings.metadata.updated_at,
+        );
+        const insertEmbedding = database.prepare(`
+          INSERT INTO document_embeddings (
+            project_id, document_id, kind, section_id, source_hash, model, dimensions, vector_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        for (const row of preservedEmbeddings.rows) {
+          insertEmbedding.run(
+            project.id, row.document_id, row.kind, row.section_id, row.source_hash,
+            row.model, row.dimensions, row.vector_json,
+          );
+        }
+      }
     });
 
     rebuild();
@@ -163,6 +281,147 @@ export function rebuildProjectIndex(
     documents: documents.length,
     relations: relations.length,
   };
+}
+
+function captureUnchangedEmbeddings(
+  database: ReturnType<typeof openProjectDatabase>,
+  projectId: string,
+  documents: IndexedDocument[],
+): StoredEmbeddingSnapshot | undefined {
+  const existingDocuments = database.prepare(`
+    SELECT id, content_hash FROM documents WHERE project_id = ? ORDER BY id
+  `).all(projectId) as Array<{ id: string; content_hash: string }>;
+  const nextDocuments = [...documents]
+    .map(({ metadata, contentHash }) => ({ id: metadata.id, content_hash: contentHash }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+  if (
+    existingDocuments.length !== nextDocuments.length ||
+    existingDocuments.some((document, index) => {
+      const next = nextDocuments[index];
+      return next === undefined || document.id !== next.id || document.content_hash !== next.content_hash;
+    })
+  ) {
+    return undefined;
+  }
+
+  const metadata = database.prepare(`
+    SELECT provider_id, model, dimensions, updated_at
+    FROM project_embedding_metadata WHERE project_id = ?
+  `).get(projectId) as StoredEmbeddingSnapshot['metadata'] | undefined;
+  if (metadata === undefined) return undefined;
+  const rows = database.prepare(`
+    SELECT document_id, kind, section_id, source_hash, model, dimensions, vector_json
+    FROM document_embeddings WHERE project_id = ?
+    ORDER BY document_id, kind, section_id
+  `).all(projectId) as StoredEmbeddingSnapshot['rows'];
+  if (rows.length === 0) return undefined;
+
+  for (const row of rows) {
+    let vector: unknown;
+    try {
+      vector = JSON.parse(row.vector_json) as unknown;
+    } catch {
+      return undefined;
+    }
+    if (
+      row.model !== metadata.model ||
+      row.dimensions !== metadata.dimensions ||
+      !Array.isArray(vector) ||
+      vector.length !== metadata.dimensions ||
+      !vector.every((value) => typeof value === 'number' && Number.isFinite(value))
+    ) {
+      return undefined;
+    }
+  }
+  return { metadata, rows };
+}
+
+const EMBEDDING_BATCH_SIZE = 32;
+
+async function createProjectEmbeddings(
+  documents: IndexedDocument[],
+  { provider, model }: ProjectEmbeddingSyncOptions,
+): Promise<{ dimensions?: number; rows: PreparedEmbedding[] }> {
+  const inputs: Array<Omit<PreparedEmbedding, 'vector'> & { text: string }> = [];
+  for (const document of documents) {
+    const documentText = [
+      document.metadata.title,
+      document.metadata.description ?? '',
+      (document.metadata.tags ?? []).join(' '),
+      document.body.trim(),
+    ].filter(Boolean).join('\n\n').trim();
+    inputs.push({
+      documentId: document.metadata.id,
+      kind: 'document',
+      sectionId: '',
+      sourceHash: createHash('sha256').update(documentText, 'utf8').digest('hex'),
+      text: documentText,
+    });
+
+    const source: SourceDocument = {
+      id: document.metadata.id,
+      path: document.path,
+      format: 'markdown',
+      content: document.body,
+      hash: document.contentHash,
+      size: Buffer.byteLength(document.body, 'utf8'),
+      modifiedAt: document.metadata.updated_at ?? document.metadata.created_at ?? '',
+      metadata: {},
+    };
+    for (const section of extractMarkdownSections(source)) {
+      const text = [section.title, section.content.trim()].filter(Boolean).join('\n\n');
+      inputs.push({
+        documentId: document.metadata.id,
+        kind: 'section',
+        sectionId: section.id,
+        sourceHash: createHash('sha256').update(text, 'utf8').digest('hex'),
+        text,
+      });
+    }
+  }
+
+  if (inputs.length === 0) {
+    return { rows: [] };
+  }
+
+  const rows: PreparedEmbedding[] = [];
+  let dimensions: number | undefined;
+  for (let offset = 0; offset < inputs.length; offset += EMBEDDING_BATCH_SIZE) {
+    const batch = inputs.slice(offset, offset + EMBEDDING_BATCH_SIZE);
+    let vectors: number[][];
+    try {
+      vectors = await provider.embed(batch.map(({ text }) => text), model);
+    } catch (cause) {
+      if (cause instanceof QLMError) throw cause;
+      throw new InternalError('Unable to generate project embeddings.', {
+        cause,
+        suggestedAction: 'Check the configured embedding provider and retry the index rebuild.',
+      });
+    }
+
+    if (!Array.isArray(vectors) || vectors.length !== batch.length) {
+      throw new ProviderError('The embedding provider returned an unexpected number of vectors.');
+    }
+    for (let index = 0; index < batch.length; index += 1) {
+      const input = batch[index];
+      const vector = vectors[index];
+      if (
+        input === undefined ||
+        !Array.isArray(vector) ||
+        vector.length === 0 ||
+        !vector.every((value) => typeof value === 'number' && Number.isFinite(value))
+      ) {
+        throw new ProviderError('The embedding provider returned an invalid vector.');
+      }
+      if (dimensions === undefined) {
+        dimensions = vector.length;
+      } else if (vector.length !== dimensions) {
+        throw new ProviderError('The embedding provider returned inconsistent vector dimensions.');
+      }
+      rows.push({ ...input, vector });
+    }
+  }
+  return { dimensions, rows };
 }
 
 function collectCategories(
