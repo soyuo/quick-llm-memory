@@ -96,8 +96,9 @@ function toSafeEntry(value: Record<string, unknown>, index: number): Application
       : event === 'application.started' || event === 'project.created' || event === 'project.reindexed'
         ? 'operation'
         : 'other';
-  const timestamp = typeof value.time === 'number' && Number.isFinite(value.time)
-    ? new Date(value.time).toISOString()
+  const date = typeof value.time === 'number' ? new Date(value.time) : undefined;
+  const timestamp = date !== undefined && Number.isFinite(date.valueOf())
+    ? date.toISOString()
     : 'Unknown time';
   const level = LEVELS.get(numericLevel) ?? 'unknown';
   let summary: string;

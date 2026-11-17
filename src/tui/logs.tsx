@@ -122,7 +122,9 @@ export function Logs({
       <Text>View: {view}  ({entries.length} entries){snapshot.truncated ? '  Earlier entries omitted' : ''}</Text>
       {snapshot.status === 'missing' ? <Text>No application log has been written yet.</Text> : null}
       {snapshot.status === 'unavailable' ? <Text>Application log is unavailable or is not a regular file.</Text> : null}
-      {view === 'mcp' ? <Text>MCP tool calls are not recorded in the application log.</Text> : null}
+      {view === 'mcp' && entries.length === 0
+        ? <Text>MCP tool calls are not recorded in the application log.</Text>
+        : null}
       {entries.length === 0 && snapshot.status === 'ready' && view !== 'mcp'
         ? <Text>No entries match this view.</Text>
         : null}

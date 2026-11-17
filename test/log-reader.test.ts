@@ -38,6 +38,7 @@ describe('application log reader', () => {
     expect(snapshot.entries[1]?.summary).toBe('Project created');
     expect(filterApplicationLogs(snapshot.entries, 'errors')).toHaveLength(1);
     expect(filterApplicationLogs(snapshot.entries, 'operations')).toHaveLength(199);
+    expect(filterApplicationLogs(snapshot.entries, 'mcp')).toHaveLength(0);
     expect(exported).not.toContain('private');
     expect(exported).not.toContain('Bearer');
   });
@@ -48,6 +49,18 @@ describe('application log reader', () => {
     const logPath = resolveLogFilePath(root);
     mkdirSync(logPath, { recursive: true });
     expect(readApplicationLogs(root).status).toBe('unavailable');
+  });
+
+  it('keeps malformed timestamp values from interrupting log inspection', () => {
+    const root = createRoot();
+    const logPath = resolveLogFilePath(root);
+    mkdirSync(dirname(logPath), { recursive: true });
+    writeFileSync(logPath, `${JSON.stringify({ time: 1e100, level: 30, event: 'application.started' })}\n`);
+
+    const snapshot = readApplicationLogs(root);
+
+    expect(snapshot.status).toBe('ready');
+    expect(snapshot.entries[0]?.timestamp).toBe('Unknown time');
   });
 });
 

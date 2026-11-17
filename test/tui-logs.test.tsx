@@ -44,6 +44,10 @@ describe('TUI application logs', () => {
     expect(copied[0]).toContain('Application error: QLM_INTERNAL_ERROR');
     expect(copied[0]).not.toContain('secret');
     expect(copied[0]).not.toContain('unsafe message');
+    app.stdin.write('\t');
+    await flushInkEffects();
+    expect(app.lastFrame()).toContain('View: mcp');
+    expect(app.lastFrame()).toContain('MCP tool calls are not recorded');
   });
 
   it('opens no file when the configured editor command is malformed', async () => {
