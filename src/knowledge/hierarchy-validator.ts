@@ -13,6 +13,7 @@ export type HierarchyValidationDiagnosticCode =
   | 'invalid_schema'
   | 'circular_hierarchy'
   | 'max_depth_exceeded'
+  | 'min_depth_not_met'
   | 'invalid_path'
   | 'reserved_name'
   | 'duplicate_id'
@@ -44,6 +45,7 @@ export type HierarchyValidationResult =
     };
 
 export interface HierarchyValidationOptions {
+  minDepth?: number;
   maxDepth?: number;
 }
 
@@ -86,15 +88,20 @@ export function validateKnowledgeHierarchy(
   options: HierarchyValidationOptions = {},
 ): HierarchyValidationResult {
   const diagnostics: HierarchyValidationDiagnostic[] = [];
+  const minDepth = options.minDepth;
   const maxDepth = options.maxDepth ?? DEFAULT_HIERARCHY_MAX_DEPTH;
-  if (!Number.isSafeInteger(maxDepth) || maxDepth < 1) {
+  if (
+    (minDepth !== undefined && (!Number.isSafeInteger(minDepth) || minDepth < 1)) ||
+    !Number.isSafeInteger(maxDepth) || maxDepth < 1 ||
+    (minDepth !== undefined && minDepth > maxDepth)
+  ) {
     return {
       valid: false,
       diagnostics: [
         {
           code: 'invalid_options',
-          path: '/options/maxDepth',
-          message: 'maxDepth must be a positive safe integer.',
+          path: '/options',
+          message: 'Hierarchy depth settings must be positive safe integers with minDepth <= maxDepth.',
         },
       ],
     };
@@ -181,6 +188,13 @@ export function validateKnowledgeHierarchy(
     }
 
     const node = current.value as HierarchyNode;
+    if (node.type === 'document' && minDepth !== undefined && current.depth < minDepth) {
+      diagnostics.push({
+        code: 'min_depth_not_met',
+        path: `${current.pointer}/path`,
+        message: `Document depth ${current.depth} is below the minimum of ${minDepth}.`,
+      });
+    }
     records.push({
       node,
       path: current.pointer,

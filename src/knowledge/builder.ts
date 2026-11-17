@@ -52,6 +52,18 @@ export interface BuildProjectKnowledgeOptions {
   project: ProjectMetadata;
   provider: AIProvider;
   model: string;
+  hierarchySettings?: {
+    minDepth: number;
+    maxDepth: number;
+    autoDepth: boolean;
+  };
+  documentSettings?: {
+    minTokens: number;
+    targetTokens: number;
+    maxTokens: number;
+    preserveCodeBlocks: boolean;
+    preserveTables: boolean;
+  };
   clock?: () => Date;
   signal?: AbortSignal;
   onProgress?: BuildProgressSink;
@@ -137,13 +149,19 @@ export async function prepareProjectKnowledgeBuild(
     const proposedHierarchy = await planKnowledgeHierarchy(sections, {
       provider: options.provider,
       model: options.model,
+      ...(options.hierarchySettings ?? {}),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
     ensureNotCancelled();
 
     emit({ stage: 'validating' });
     ensureNotCancelled();
-    const hierarchy = assertValidKnowledgeHierarchy(proposedHierarchy, sections);
+    const hierarchy = assertValidKnowledgeHierarchy(proposedHierarchy, sections, {
+      ...(options.hierarchySettings === undefined ? {} : {
+        minDepth: options.hierarchySettings.minDepth,
+        maxDepth: options.hierarchySettings.maxDepth,
+      }),
+    });
     ensureNotCancelled();
 
     emit({
@@ -204,6 +222,7 @@ export async function executePreparedKnowledgeBuild(
           sourceSections: sections,
           ancestors: planned.ancestors,
           relatedDocuments: allDocumentNodes,
+          ...(options.documentSettings ?? {}),
           ...(options.clock === undefined ? {} : { clock: options.clock }),
           ...(options.signal === undefined ? {} : { signal: options.signal }),
         }),

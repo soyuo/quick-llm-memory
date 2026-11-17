@@ -24,7 +24,7 @@ Installing from source builds the small native helper used to publish project tr
 | i (Projects) | Import an existing project directory |
 | e (Projects) | Export the selected project to a new directory |
 | Tab (Build wizard) | Move between setting fields |
-| Arrow keys (Build wizard choices) | Change the provider/theme or toggle boolean settings |
+| Arrow keys (Build wizard choices) | Change the provider or toggle boolean settings |
 | Space (Build wizard toggles) | Toggle boolean settings |
 | Enter (Build wizard) | Validate and continue; leave from the completed screen |
 | Esc / Ctrl+B (Build wizard) | Go back a step; leave from the first or completed screen |

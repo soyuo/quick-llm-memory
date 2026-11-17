@@ -34,7 +34,6 @@ describe('TUI knowledge build setup wizard', () => {
       maxTokens: '2000',
       preserveCodeBlocks: true,
       preserveTables: true,
-      theme: 'dark',
     };
     expect(validateBuildWizardStep('hierarchy', draft))
       .toBe('Maximum depth must be at least the minimum depth.');
@@ -112,6 +111,7 @@ describe('TUI knowledge build setup wizard', () => {
     await waitForFrame(app, '8/12 Structure Preview');
     expect(app.lastFrame()).toContain('notes.md');
     expect(provider.requests.map(({ schemaName }) => schemaName)).toEqual(['qlm_knowledge_hierarchy']);
+    expect(provider.requests[0]?.prompt).toContain('between 1 and 4, inclusive');
     expect(existsSync(join(dataRoot, 'projects', project.name, 'knowledge'))).toBe(false);
     expect(existsSync(resolveProjectDatabasePath(join(dataRoot, 'projects', project.name)))).toBe(false);
 
@@ -132,6 +132,10 @@ describe('TUI knowledge build setup wizard', () => {
     expect(provider.requests.map(({ schemaName }) => schemaName)).toEqual([
       'qlm_knowledge_hierarchy', 'qlm_generated_document_content',
     ]);
+    expect(provider.requests[1]?.maxTokens).toBe(2000);
+    expect(provider.requests[1]?.prompt).toContain('Aim for approximately 1000 tokens.');
+    expect(provider.requests[1]?.prompt).toContain('Preserve source code blocks intact');
+    expect(provider.requests[1]?.prompt).toContain('Preserve source tables');
     expect(readFileSync(join(dataRoot, 'projects', project.name, 'knowledge', 'notes.md'), 'utf8'))
       .toContain('Generated knowledge document.');
     expect(readFileSync(settingsFile, 'utf8')).toBe('logging:\n  level: info\n');
