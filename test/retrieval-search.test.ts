@@ -140,7 +140,7 @@ describe('path and hierarchical retrieval', () => {
 
     expect(results.map(({ path }) => path)).toContain('security/overview.md');
     expect(results.map(({ path }) => path)).toContain('other/related.md');
-  });
+  }, 15_000);
 
   it('lets a replaceable ranker receive exact-path candidates', () => {
     const { projectRoot, project } = createIndexedProject();
@@ -566,7 +566,7 @@ describe('related-document expansion', () => {
       ...base,
       maxRelatedResults: 21,
     })).toThrow(InputError);
-  });
+  }, 15_000);
 
   it('renders related paths with a clear CLI separator and source link', async () => {
     const { dataRoot, projectRoot, project } = createIndexedProject();

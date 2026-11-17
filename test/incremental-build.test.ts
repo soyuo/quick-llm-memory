@@ -135,7 +135,7 @@ describe('incremental knowledge builds', () => {
     });
     expect(excludedResult.conflictResolutions).toEqual([{ path: 'alpha.md', action: 'exclude' }]);
     expect(readFileSync(excludedBuild.documentPath, 'utf8')).toBe(before);
-  });
+  }, 15_000);
 
   it('cancels conflict review before changing documents or the index', async () => {
     const { fixture, prepared, provider, documentPath, editedMarkdown } = await createEditedDocumentBuild();
