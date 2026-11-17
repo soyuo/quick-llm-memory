@@ -1,9 +1,17 @@
 import { ConfigurationError } from '../config/error.js';
 import type { Settings } from '../config/schema.js';
 import { OpenAICompatibleProvider } from './openai-compatible-provider.js';
-import type { AIProvider } from './provider.js';
+import type { AIProvider, EmbeddingProvider } from './provider.js';
 
 export function createConfiguredBuildProvider(settings: Settings): AIProvider {
+  return createConfiguredProvider(settings);
+}
+
+export function createConfiguredEmbeddingProvider(settings: Settings): EmbeddingProvider {
+  return createConfiguredProvider(settings);
+}
+
+function createConfiguredProvider(settings: Settings): OpenAICompatibleProvider {
   const providerName = settings.ai?.provider ?? 'openai';
   if (providerName !== 'openai' && providerName !== 'openai-compatible') {
     throw new ConfigurationError(`Unsupported AI provider for knowledge builds: ${providerName}.`, {
