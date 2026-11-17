@@ -18,6 +18,7 @@ import {
 import { BuildWizard } from './build-wizard.js';
 import { Explorer } from './explorer.js';
 import { Search } from './search.js';
+import { McpManager } from './mcp-manager.js';
 import { loadTuiDashboardSnapshot } from './dashboard.js';
 import type { Settings } from '../config/schema.js';
 import type { AIProvider } from '../providers/provider.js';
@@ -68,9 +69,19 @@ export interface TuiAppProps {
   dataRoot?: string;
   onExit?: () => void;
   buildProviderFactory?: (settings: Settings) => AIProvider;
+  mcpConnectionCheck?: (signal: AbortSignal) => Promise<string[]>;
+  copyText?: (text: string) => void;
 }
 
-export function TuiApp({ columns, rows, dataRoot, onExit, buildProviderFactory }: TuiAppProps): React.JSX.Element {
+export function TuiApp({
+  columns,
+  rows,
+  dataRoot,
+  onExit,
+  buildProviderFactory,
+  mcpConnectionCheck,
+  copyText,
+}: TuiAppProps): React.JSX.Element {
   const windowSize = useWindowSize();
   const size = {
     columns: columns ?? windowSize.columns ?? 80,
@@ -162,6 +173,10 @@ export function TuiApp({ columns, rows, dataRoot, onExit, buildProviderFactory }
     }
 
     if (activeScreen === 'Search') {
+      return;
+    }
+
+    if (activeScreen === 'MCP Manager') {
       return;
     }
 
@@ -571,6 +586,16 @@ export function TuiApp({ columns, rows, dataRoot, onExit, buildProviderFactory }
           dataRoot={root}
           initialProjectName={currentProjectName}
           refreshVersion={refreshVersion}
+          onBack={() => {
+            setActiveScreen(undefined);
+            setFocusedPane('navigation');
+          }}
+          onExit={onExit}
+        />
+      ) : activeScreen === 'MCP Manager' ? (
+        <McpManager
+          {...(mcpConnectionCheck === undefined ? {} : { probeConnection: mcpConnectionCheck })}
+          {...(copyText === undefined ? {} : { copyText })}
           onBack={() => {
             setActiveScreen(undefined);
             setFocusedPane('navigation');

@@ -45,7 +45,7 @@ export function loadTuiDashboardSnapshot(
       projectSummaryAvailable: false,
       recentActivities: [],
       buildSummary: 'Build history is not available.',
-      mcpSummary: 'MCP server: not connected; stdio is available with qlm mcp serve.',
+      mcpSummary: 'MCP status is client-managed; use MCP Manager to check local stdio.',
       error: 'Project information is unavailable.',
     };
   }
@@ -80,7 +80,7 @@ export function loadTuiDashboardSnapshot(
     projectSummaryAvailable,
     recentActivities: readRecentActivities(dataRoot, projects),
     buildSummary: 'Build history is not recorded yet.',
-    mcpSummary: 'MCP server: not connected; stdio is available with qlm mcp serve.',
+    mcpSummary: 'MCP status is client-managed; use MCP Manager to check local stdio.',
   };
 }
 
