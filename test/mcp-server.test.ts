@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -261,6 +261,54 @@ describe('MCP server bootstrap', () => {
       await expect(fetch(statusUrl, { headers: identityHeader })).rejects.toThrow();
     } finally {
       await server.close().catch(() => {});
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects over-limit MCP calls before invoking tools', async () => {
+    const dataRoot = mkdtempSync(join(tmpdir(), 'qlm-mcp-rate-'));
+    let calls = 0;
+    const server = await serveMcpHttp({
+      host: '127.0.0.1', port: 0, dataRoot, maxRequestsPerMinute: 4,
+      serverFactory: () => {
+        const mcp = new McpServer({ name: 'rate-test', version: '1.0.0' });
+        mcp.registerTool('count', { description: 'Count calls.', inputSchema: {} }, () => {
+          calls += 1;
+          return { content: [{ type: 'text' as const, text: 'ok' }] };
+        });
+        return mcp;
+      },
+    });
+    const transport = new StreamableHTTPClientTransport(new URL(server.url));
+    const client = new Client({ name: 'rate-test-client', version: '1.0.0' });
+    try {
+      await client.connect(transport);
+      await expect(client.callTool({ name: 'count', arguments: {} })).resolves.toBeDefined();
+      await expect(client.callTool({ name: 'count', arguments: {} })).rejects.toThrow();
+      expect(calls).toBe(1);
+    } finally {
+      await client.close();
+      await server.close();
+      const accessLogs = readFileSync(join(dataRoot, 'logs', 'application.log'), 'utf8');
+      expect(accessLogs).toContain('MCP HTTP access');
+      expect(accessLogs).toContain('"method":"POST"');
+      expect(accessLogs).not.toContain('authorization');
+      expect(accessLogs).not.toContain('Bearer');
+      expect(accessLogs).not.toContain('arguments');
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('closes the application log when HTTP startup fails', async () => {
+    const occupied = await serveMcpHttp({ host: '127.0.0.1', port: 0 });
+    const dataRoot = mkdtempSync(join(tmpdir(), 'qlm-mcp-listen-failure-'));
+    try {
+      await expect(serveMcpHttp({ host: '127.0.0.1', port: occupied.port, dataRoot })).rejects.toThrow();
+      const log = join(dataRoot, 'logs', 'application.log');
+      expect(readFileSync(log, 'utf8')).toContain('Application started');
+      rmSync(dataRoot, { recursive: true, force: true });
+    } finally {
+      await occupied.close();
       rmSync(dataRoot, { recursive: true, force: true });
     }
   });
