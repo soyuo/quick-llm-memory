@@ -16,7 +16,11 @@ import {
   openProjectDatabase,
   resolveProjectDatabasePath,
 } from '../src/database/database.js';
-import { PROJECT_DATABASE_SCHEMA_VERSION } from '../src/database/schema.js';
+import {
+  EMBEDDING_SCHEMA_PREVIOUS_VERSION,
+  PROJECT_DATABASE_SCHEMA_VERSION,
+  rollbackEmbeddingSchemaMigration,
+} from '../src/database/schema.js';
 import { initializeProject } from '../src/projects/manager.js';
 
 const temporaryDirectories: string[] = [];
@@ -57,9 +61,11 @@ describe('project SQLite database', () => {
         .all(),
     ).toEqual([
       'categories',
+      'document_embeddings',
       'document_fts',
       'document_relations',
       'documents',
+      'project_embedding_metadata',
       'projects',
       'source_snapshot_files',
       'source_snapshot_sections',
@@ -163,7 +169,11 @@ describe('project SQLite database', () => {
       'existing-doc', project.id, 'security/existing.md', 'Existing', null, 2,
       'hash', 'verified', project.created_at, project.updated_at,
     );
-    original.exec('DROP TABLE document_fts');
+    original.exec(`
+      DROP TABLE document_embeddings;
+      DROP TABLE project_embedding_metadata;
+      DROP TABLE document_fts;
+    `);
     original.pragma('user_version = 1');
     original.close();
 
@@ -194,6 +204,8 @@ describe('project SQLite database', () => {
       'hash', 'verified', project.created_at, project.updated_at,
     );
     original.exec(`
+      DROP TABLE document_embeddings;
+      DROP TABLE project_embedding_metadata;
       DROP TABLE source_snapshot_sections;
       DROP TABLE source_snapshot_files;
       DROP TABLE source_snapshots;
@@ -227,6 +239,7 @@ describe('project SQLite database', () => {
       INSERT INTO source_snapshot_sections (project_id, source_root, source_id, section_id, content_hash)
       VALUES (?, ?, ?, ?, ?)
     `).run(project.id, 'C:/sources', 'source-1', 'stable-section', 'b'.repeat(64));
+    original.exec('DROP TABLE document_embeddings; DROP TABLE project_embedding_metadata;');
     original.pragma('user_version = 3');
     original.close();
 
@@ -242,6 +255,147 @@ describe('project SQLite database', () => {
       });
     } finally {
       migrated.close();
+    }
+  });
+
+  it('migrates version 4 indexes to embedding storage without changing documents', () => {
+    const { projectRoot, project } = createProject();
+    const original = openDatabase(projectRoot, project);
+    original.prepare(`
+      INSERT INTO documents (
+        id, project_id, path, title, category_id, depth, content_hash,
+        status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'existing-doc', project.id, 'notes.md', 'Notes', null, 1,
+      'hash', 'verified', project.created_at, project.updated_at,
+    );
+    original.exec(`
+      DROP TABLE document_embeddings;
+      DROP TABLE project_embedding_metadata;
+    `);
+    original.pragma(`user_version = ${EMBEDDING_SCHEMA_PREVIOUS_VERSION}`);
+    original.close();
+
+    const migrated = openDatabase(projectRoot, project);
+    try {
+      expect(migrated.pragma('user_version', { simple: true })).toBe(
+        PROJECT_DATABASE_SCHEMA_VERSION,
+      );
+      expect(migrated.prepare('SELECT id, path FROM documents').get()).toEqual({
+        id: 'existing-doc',
+        path: 'notes.md',
+      });
+      expect(migrated.prepare("SELECT name FROM sqlite_schema WHERE name = 'document_embeddings'").get())
+        .toEqual({ name: 'document_embeddings' });
+    } finally {
+      migrated.close();
+    }
+  });
+
+  it('rolls back embedding storage while preserving version 4 project data', () => {
+    const { projectRoot, project } = createProject();
+    const database = openDatabase(projectRoot, project);
+    database.prepare(`
+      INSERT INTO documents (
+        id, project_id, path, title, category_id, depth, content_hash,
+        status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'existing-doc', project.id, 'notes.md', 'Notes', null, 1,
+      'hash', 'verified', project.created_at, project.updated_at,
+    );
+    database.prepare(`
+      INSERT INTO project_embedding_metadata (project_id, provider_id, model, dimensions, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(project.id, 'openai', 'embed-test', 2, project.updated_at);
+    database.prepare(`
+      INSERT INTO document_embeddings (
+        project_id, document_id, kind, section_id, source_hash, model, dimensions, vector_json
+      ) VALUES (?, ?, 'document', '', ?, ?, 2, ?)
+    `).run(project.id, 'existing-doc', 'a'.repeat(64), 'embed-test', '[0.1,0.2]');
+
+    rollbackEmbeddingSchemaMigration(database);
+
+    expect(database.pragma('user_version', { simple: true })).toBe(
+      EMBEDDING_SCHEMA_PREVIOUS_VERSION,
+    );
+    expect(database.prepare('SELECT id, path FROM documents').get()).toEqual({
+      id: 'existing-doc',
+      path: 'notes.md',
+    });
+    expect(database.prepare("SELECT name FROM sqlite_schema WHERE name = 'document_embeddings'").get())
+      .toBeUndefined();
+    expect(database.prepare("SELECT name FROM sqlite_schema WHERE name = 'project_embedding_metadata'").get())
+      .toBeUndefined();
+  });
+
+  it('refuses to migrate version 4 indexes with conflicting embedding objects', () => {
+    const { projectRoot, project } = createProject();
+    const original = openDatabase(projectRoot, project);
+    original.exec(`
+      DROP TABLE document_embeddings;
+      DROP TABLE project_embedding_metadata;
+      CREATE TABLE document_embeddings (unexpected TEXT);
+    `);
+    original.pragma(`user_version = ${EMBEDDING_SCHEMA_PREVIOUS_VERSION}`);
+    original.close();
+
+    expect(() => openProjectDatabase(projectRoot, project)).toThrow(
+      /contains conflicting embedding objects; refusing to migrate it\./,
+    );
+    const unchanged = new Database(resolveProjectDatabasePath(projectRoot), { readonly: true });
+    try {
+      expect(unchanged.pragma('user_version', { simple: true })).toBe(
+        EMBEDDING_SCHEMA_PREVIOUS_VERSION,
+      );
+      expect(unchanged.prepare("SELECT sql FROM sqlite_schema WHERE name = 'document_embeddings'").get())
+        .toEqual({ sql: 'CREATE TABLE document_embeddings (unexpected TEXT)' });
+    } finally {
+      unchanged.close();
+    }
+  });
+
+  it('rolls back the version 5 schema when migration completion fails', () => {
+    const { projectRoot, project } = createProject();
+    const original = openDatabase(projectRoot, project);
+    original.prepare(`
+      INSERT INTO documents (
+        id, project_id, path, title, category_id, depth, content_hash,
+        status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'preserved-doc', project.id, 'existing.md', 'Existing', null, 1,
+      'hash', 'verified', project.created_at, project.updated_at,
+    );
+    original.exec(`
+      DROP TABLE document_embeddings;
+      DROP TABLE project_embedding_metadata;
+      CREATE TRIGGER reject_project_update
+      BEFORE UPDATE ON projects
+      BEGIN
+        SELECT RAISE(ABORT, 'injected migration failure');
+      END;
+    `);
+    original.pragma(`user_version = ${EMBEDDING_SCHEMA_PREVIOUS_VERSION}`);
+    original.close();
+
+    expect(() => openProjectDatabase(projectRoot, project)).toThrow(ConfigurationError);
+    const unchanged = new Database(resolveProjectDatabasePath(projectRoot), { readonly: true });
+    try {
+      expect(unchanged.pragma('user_version', { simple: true })).toBe(
+        EMBEDDING_SCHEMA_PREVIOUS_VERSION,
+      );
+      expect(unchanged.prepare('SELECT id, path FROM documents').get()).toEqual({
+        id: 'preserved-doc',
+        path: 'existing.md',
+      });
+      expect(unchanged.prepare("SELECT name FROM sqlite_schema WHERE name = 'document_embeddings'").get())
+        .toBeUndefined();
+      expect(unchanged.prepare("SELECT name FROM sqlite_schema WHERE name = 'project_embedding_metadata'").get())
+        .toBeUndefined();
+    } finally {
+      unchanged.close();
     }
   });
 

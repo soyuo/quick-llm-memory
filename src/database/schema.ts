@@ -2,7 +2,8 @@ import type Database from 'better-sqlite3';
 import { ConfigurationError } from '../config/error.js';
 import type { ProjectMetadata } from '../projects/schema.js';
 
-export const PROJECT_DATABASE_SCHEMA_VERSION = 4;
+export const PROJECT_DATABASE_SCHEMA_VERSION = 5;
+export const EMBEDDING_SCHEMA_PREVIOUS_VERSION = 4;
 
 export function initializeProjectDatabaseSchema(
   database: Database.Database,
@@ -107,6 +108,30 @@ export function initializeProjectDatabaseSchema(
     }
   }
 
+  if (currentVersion < PROJECT_DATABASE_SCHEMA_VERSION) {
+    const conflictingEmbeddingObjects = database
+      .prepare(`
+        SELECT name
+        FROM sqlite_schema
+        WHERE name IN ('project_embedding_metadata', 'document_embeddings')
+        ORDER BY name
+      `)
+      .pluck()
+      .all();
+    if (conflictingEmbeddingObjects.length > 0) {
+      throw new ConfigurationError(
+        `The version ${currentVersion} project database contains conflicting embedding objects; refusing to migrate it.`,
+        {
+          filePath: database.name,
+          suggestedAction:
+            'Back up the database and inspect its embedding objects before retrying the migration.',
+        },
+      );
+    }
+  } else {
+    assertEmbeddingSchema(database);
+  }
+
   const migrate = database.transaction(() => {
     database.exec(`
       CREATE TABLE IF NOT EXISTS projects (
@@ -206,6 +231,40 @@ export function initializeProjectDatabaseSchema(
     }
 
     if (currentVersion < PROJECT_DATABASE_SCHEMA_VERSION) {
+      database.exec(`
+        CREATE TABLE project_embedding_metadata (
+          project_id TEXT PRIMARY KEY,
+          provider_id TEXT NOT NULL,
+          model TEXT NOT NULL,
+          dimensions INTEGER NOT NULL CHECK (dimensions > 0),
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE document_embeddings (
+          project_id TEXT NOT NULL,
+          document_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('document', 'section')),
+          section_id TEXT NOT NULL,
+          source_hash TEXT NOT NULL CHECK (
+            length(source_hash) = 64 AND source_hash NOT GLOB '*[^0-9a-f]*'
+          ),
+          model TEXT NOT NULL,
+          dimensions INTEGER NOT NULL CHECK (dimensions > 0),
+          vector_json TEXT NOT NULL CHECK (length(vector_json) > 2),
+          PRIMARY KEY (project_id, document_id, kind, section_id),
+          CHECK (
+            (kind = 'document' AND section_id = '') OR
+            (kind = 'section' AND length(section_id) > 0)
+          ),
+          FOREIGN KEY(project_id)
+            REFERENCES project_embedding_metadata(project_id) ON DELETE CASCADE,
+          FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
+        );
+      `);
+    }
+
+    if (currentVersion < PROJECT_DATABASE_SCHEMA_VERSION) {
       database.pragma(`user_version = ${PROJECT_DATABASE_SCHEMA_VERSION}`);
     }
 
@@ -228,4 +287,61 @@ export function initializeProjectDatabaseSchema(
   });
 
   migrate();
+}
+
+/**
+ * Roll back only the additive embedding migration. Embeddings are derived data;
+ * dropping them restores the version 4 schema without changing project content.
+ */
+export function rollbackEmbeddingSchemaMigration(database: Database.Database): void {
+  const currentVersion = database.pragma('user_version', { simple: true });
+  if (currentVersion !== PROJECT_DATABASE_SCHEMA_VERSION) {
+    throw new ConfigurationError(
+      `Cannot roll back embedding storage from schema version ${String(currentVersion)}.`,
+      { filePath: database.name },
+    );
+  }
+  assertEmbeddingSchema(database);
+
+  const rollback = database.transaction(() => {
+    database.exec(`
+      DROP TABLE document_embeddings;
+      DROP TABLE project_embedding_metadata;
+    `);
+    database.pragma(`user_version = ${EMBEDDING_SCHEMA_PREVIOUS_VERSION}`);
+  });
+  rollback();
+}
+
+function assertEmbeddingSchema(database: Database.Database): void {
+  const requiredColumns = {
+    project_embedding_metadata: [
+      'project_id', 'provider_id', 'model', 'dimensions', 'updated_at',
+    ],
+    document_embeddings: [
+      'project_id', 'document_id', 'kind', 'section_id', 'source_hash',
+      'model', 'dimensions', 'vector_json',
+    ],
+  } as const;
+
+  for (const [table, required] of Object.entries(requiredColumns)) {
+    const object = database
+      .prepare('SELECT type FROM sqlite_schema WHERE name = ?')
+      .get(table) as { type: string } | undefined;
+    const columns = database.prepare(`PRAGMA table_info('${table}')`).all() as Array<{
+      name: string;
+    }>;
+    if (
+      object?.type !== 'table' ||
+      required.some((column) => !columns.some(({ name }) => name === column))
+    ) {
+      throw new ConfigurationError(
+        'The project database has an invalid embedding schema.',
+        {
+          filePath: database.name,
+          suggestedAction: 'Back up the database and run qlm reindex to repair its schema.',
+        },
+      );
+    }
+  }
 }
