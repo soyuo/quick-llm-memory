@@ -66,8 +66,10 @@ afterEach(() => {
 
 class McpFakeEmbeddingProvider implements EmbeddingProvider {
   readonly id = 'mcp-test-embeddings';
+  readonly calls: string[][] = [];
 
   async embed(texts: string[]): Promise<number[][]> {
+    this.calls.push([...texts]);
     return texts.map((text) => /authentication|identity|security/i.test(text)
       ? [1, 0, 0]
       : [0, 1, 0]);
@@ -311,6 +313,20 @@ describe('MCP read-only project tools', () => {
         ]),
       });
       expect((result.structuredContent as { results: unknown[] }).results).toHaveLength(2);
+
+      const callsBeforeHybrid = provider.calls.length;
+      const hybrid = await client.callTool({
+        name: 'memory_search',
+        arguments: {
+          project: 'demo',
+          query: 'authentication and identity control',
+          mode: 'hybrid',
+          maxResults: 2,
+        },
+      });
+      expect(hybrid.isError).not.toBe(true);
+      expect((hybrid.structuredContent as { results: unknown[] }).results).toHaveLength(2);
+      expect(provider.calls.length).toBeGreaterThan(callsBeforeHybrid);
     }, () => ({ provider, model: 'embedding-v1' }));
 
     expect(readFileSync(databasePath)).toEqual(beforeDatabase);
