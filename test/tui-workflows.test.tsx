@@ -298,4 +298,7 @@ class WorkflowProvider implements AIProvider {
   async countTokens(_text: string, _model: string): Promise<TokenCount> {
     return { count: 0, isEstimate: true };
   }
+  async embed(texts: string[]): Promise<number[][]> {
+    return texts.map(() => [0.1, 0.2, 0.3]);
+  }
 }
