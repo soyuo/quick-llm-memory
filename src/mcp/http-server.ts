@@ -3,8 +3,10 @@ import { isIP, type AddressInfo } from 'node:net';
 import { createHash } from 'node:crypto';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import {
+  hostHeaderValidation,
   localhostHostValidation,
   localhostOriginValidation,
+  originValidation,
   toNodeHandler,
 } from '@modelcontextprotocol/node';
 import { InputError, InternalError } from '../errors/qlm-error.js';
@@ -14,6 +16,10 @@ export interface ServeMcpHttpOptions extends CreateMcpServerOptions {
   host?: string;
   port?: number;
   managedInstanceId?: string;
+  allowRemote?: boolean;
+  confirmRemoteExposure?: boolean;
+  allowedHosts?: string[];
+  allowedOrigins?: string[];
 }
 
 export interface McpHttpServerHandle {
@@ -30,7 +36,15 @@ export async function serveMcpHttp(
 ): Promise<McpHttpServerHandle> {
   const host = options.host ?? '127.0.0.1';
   const port = options.port ?? 8765;
-  assertLoopbackHost(host);
+  const loopback = isLoopbackHost(host);
+  if (!loopback && (!options.allowRemote || !options.confirmRemoteExposure)) {
+    throw new InputError('Remote MCP HTTP binding requires --allow-remote and --confirm-remote-exposure.');
+  }
+  if (!loopback && (!options.allowedHosts?.length || !options.allowedOrigins?.length)) {
+    throw new InputError('Remote MCP HTTP binding requires explicit allowed Host and Origin lists.');
+  }
+  const allowedHosts = normalizeAllowlist(options.allowedHosts ?? [], 'Host');
+  const allowedOrigins = normalizeAllowlist(options.allowedOrigins ?? [], 'Origin');
   if (!Number.isSafeInteger(port) || port < 0 || port > 65_535) {
     throw new InputError('Invalid MCP HTTP port.', {
       suggestedAction: 'Choose a port between 1 and 65535.',
@@ -39,8 +53,8 @@ export async function serveMcpHttp(
 
   const handler = createMcpHandler(() => createMcpServer(options));
   const handleNodeRequest = toNodeHandler(handler);
-  const validateHost = localhostHostValidation();
-  const validateOrigin = localhostOriginValidation();
+  const validateHost = loopback ? localhostHostValidation() : hostHeaderValidation(allowedHosts);
+  const validateOrigin = loopback ? localhostOriginValidation() : originValidation(allowedOrigins);
   const startedAt = options.managedInstanceId === undefined
     ? undefined
     : new Date().toISOString();
@@ -135,16 +149,20 @@ export function getCurrentCommandIdentity(): string {
     .digest('hex');
 }
 
-function assertLoopbackHost(host: string): void {
+function isLoopbackHost(host: string): boolean {
   const family = isIP(host);
-  const isLoopback = host.toLowerCase() === 'localhost'
+  return host.toLowerCase() === 'localhost'
     || (family === 4 && host.split('.')[0] === '127')
     || (family === 6 && host === '::1');
-  if (!isLoopback) {
-    throw new InputError('MCP HTTP currently accepts loopback hosts only.', {
-      suggestedAction: 'Use 127.0.0.1, ::1, or localhost.',
-    });
+}
+
+function normalizeAllowlist(values: string[], label: string): string[] {
+  const normalized = values.map((value) => value.trim().toLowerCase());
+  if (normalized.some((value) => value.length === 0 || value.includes('*') || /[\s/@?#]/.test(value)
+    || (value.includes(':') && !(value.startsWith('[') && value.endsWith(']') && isIP(value.slice(1, -1)) === 6)))) {
+    throw new InputError(`Invalid allowed ${label} hostname.`);
   }
+  return [...new Set(normalized)];
 }
 
 function formatUrlHost(host: string): string {

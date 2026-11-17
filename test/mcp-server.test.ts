@@ -73,6 +73,12 @@ describe('MCP server bootstrap', () => {
       });
       expect(denied.status).toBe(404);
 
+      const rejectedOrigin = await fetch(server.url, {
+        method: 'GET',
+        headers: { origin: 'http://attacker.example' },
+      });
+      expect(rejectedOrigin.status).toBe(403);
+
       const status = await fetch(statusUrl, { headers: identityHeader });
       expect(status.status).toBe(200);
       await expect(status.json()).resolves.toMatchObject({
@@ -145,9 +151,14 @@ describe('MCP server bootstrap', () => {
     }
   });
 
-  it('rejects non-loopback hosts and invalid HTTP ports', async () => {
+  it('requires explicit remote exposure confirmation and allowlists', async () => {
     await expect(serveMcpHttp({ host: '0.0.0.0', port: 0 }))
-      .rejects.toThrow('loopback hosts only');
+      .rejects.toThrow('--allow-remote and --confirm-remote-exposure');
+    await expect(serveMcpHttp({ host: '0.0.0.0', port: 0, allowRemote: true, confirmRemoteExposure: true }))
+      .rejects.toThrow('explicit allowed Host and Origin lists');
+    await expect(serveMcpHttp({ host: '0.0.0.0', port: 0, allowRemote: true, confirmRemoteExposure: true,
+      allowedHosts: ['bad host'], allowedOrigins: ['example.com'] }))
+      .rejects.toThrow('Invalid allowed Host hostname');
     await expect(serveMcpHttp({ host: '127.0.0.1', port: 65_536 }))
       .rejects.toThrow('Invalid MCP HTTP port');
   });
@@ -280,7 +291,8 @@ describe('MCP server bootstrap', () => {
     );
 
     expect(exitCode).toBe(0);
-    expect(serveHttp).toHaveBeenCalledWith({ host: '127.0.0.1', port: 8765 });
+    expect(serveHttp).toHaveBeenCalledWith({ host: '127.0.0.1', port: 8765, allowRemote: false,
+      confirmRemoteExposure: false, allowedHosts: [], allowedOrigins: [] });
     expect(errors.join('')).toContain('http://127.0.0.1:8765/mcp');
     await shutdown?.();
     expect(close).toHaveBeenCalledOnce();
