@@ -58,6 +58,39 @@ describe('semantic retrieval', () => {
     expect(provider.calls).toHaveLength(callsBeforeZeroLimit);
   });
 
+  it('reports the best matching section when the document vector ranks higher', async () => {
+    const fixture = createProject();
+    const document = addDocument(
+      fixture.knowledgeRoot,
+      'security/rotation.md',
+      'Credential Rotation',
+      '\n## Rotate access tokens\nRotate expired credentials.\n',
+    );
+    const provider = new FakeEmbeddingProvider((text) =>
+      text === 'renew credentials' || text.includes('Credential Rotation')
+        ? [1, 0, 0]
+        : [0.9, 0.1, 0],
+    );
+    await rebuildProjectIndexWithEmbeddings(fixture.projectRoot, fixture.project, {
+      provider,
+      model: 'embedding-v1',
+    });
+
+    const results = await searchProjectDocuments({
+      ...fixture,
+      projectId: fixture.project.id,
+      query: 'renew credentials',
+      mode: 'semantic',
+      embeddingProvider: provider,
+      embeddingModel: 'embedding-v1',
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.score).toBe(1);
+    expect(results[0]?.matchedSections).toEqual([expect.stringMatching(/^section-/)]);
+    expect(results[0]?.matchedSections).not.toContain(document.documentId);
+  });
+
   it('fails before provider calls when vectors are missing or use another model', async () => {
     const missing = createProject();
     addDocument(missing.knowledgeRoot, 'security/rotation.md', 'Credential Rotation',
@@ -149,7 +182,6 @@ class FakeEmbeddingProvider implements EmbeddingProvider {
     return texts.map((text) => this.override?.(text) ?? vectorFor(text));
   }
 }
-
 function vectorFor(text: string): number[] {
   const normalized = text.toLowerCase();
   if (/credential|token|secret|rotation|renew/.test(normalized)) return [1, 0, 0];
@@ -185,4 +217,3 @@ function addDocument(
   });
   return { path: join(knowledgeRoot, path), documentId: document.metadata.id };
 }
-

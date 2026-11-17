@@ -78,6 +78,7 @@ interface SemanticCandidate {
   path: string;
   contentHash: string;
   score: number;
+  bestSectionScore: number;
   matchedSections: string[];
 }
 
@@ -222,16 +223,26 @@ async function searchSemanticDocuments(
       }
       const score = cosineSimilarity(queryVector, vector as number[]);
       const current = candidates.get(row.document_id);
-      if (current === undefined || score > current.score) {
+      if (current === undefined) {
         candidates.set(row.document_id, {
           documentId: row.document_id,
           path: row.path,
           contentHash: row.content_hash,
           score,
-          matchedSections: row.kind === 'section' ? [row.section_id] : [],
+          bestSectionScore: Number.NEGATIVE_INFINITY,
+          matchedSections: [],
         });
-      } else if (score === current.score && row.kind === 'section') {
-        current.matchedSections.push(row.section_id);
+      } else if (score > current.score) {
+        current.score = score;
+      }
+      const candidate = candidates.get(row.document_id)!;
+      if (row.kind === 'section') {
+        if (score > candidate.bestSectionScore) {
+          candidate.bestSectionScore = score;
+          candidate.matchedSections = [row.section_id];
+        } else if (score === candidate.bestSectionScore) {
+          candidate.matchedSections.push(row.section_id);
+        }
       }
     }
     const documentCount = database.prepare(
