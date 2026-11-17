@@ -3,11 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { afterEach, describe, expect, it } from 'vitest';
-import { rebuildProjectIndex } from '../src/database/reindex.js';
+import { rebuildProjectIndex, rebuildProjectIndexWithEmbeddings } from '../src/database/reindex.js';
 import { resolveProjectDatabasePath } from '../src/database/database.js';
 import { createMcpServer } from '../src/mcp/server.js';
 import { createMarkdownDocument } from '../src/markdown/repository.js';
 import { initializeProject } from '../src/projects/manager.js';
+import type { EmbeddingProvider } from '../src/providers/provider.js';
 
 const roots: string[] = [];
 
@@ -38,11 +39,15 @@ function fixture() {
     body: '\nAuthentication and access control.',
   });
   rebuildProjectIndex(projectRoot, project);
-  return { dataRoot, projectRoot, knowledgeRoot };
+  return { dataRoot, project, projectRoot, knowledgeRoot };
 }
 
-async function withClient<T>(dataRoot: string, run: (client: Client) => Promise<T>): Promise<T> {
-  const server = createMcpServer({ dataRoot });
+async function withClient<T>(
+  dataRoot: string,
+  run: (client: Client) => Promise<T>,
+  embeddingProviderFactory?: () => { provider: EmbeddingProvider; model: string },
+): Promise<T> {
+  const server = createMcpServer({ dataRoot, embeddingProviderFactory });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
   const client = new Client({ name: 'qlm-tools-test', version: '1.0.0' });
@@ -58,6 +63,16 @@ async function withClient<T>(dataRoot: string, run: (client: Client) => Promise<
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
+
+class McpFakeEmbeddingProvider implements EmbeddingProvider {
+  readonly id = 'mcp-test-embeddings';
+
+  async embed(texts: string[]): Promise<number[][]> {
+    return texts.map((text) => /authentication|identity|security/i.test(text)
+      ? [1, 0, 0]
+      : [0, 1, 0]);
+  }
+}
 
 describe('MCP read-only project tools', () => {
   it('advertises the three read-only tools and validated bounded schemas', async () => {
@@ -75,7 +90,7 @@ describe('MCP read-only project tools', () => {
       expect(tree?.inputSchema.properties).toMatchObject({ maxEntries: { maximum: 500 } });
       const search = tools.find((tool) => tool.name === 'memory_search');
       expect(search?.inputSchema.properties).toMatchObject({
-        mode: { enum: ['path', 'hierarchical', 'fulltext', 'hybrid'] },
+        mode: { enum: ['path', 'hierarchical', 'fulltext', 'semantic', 'hybrid'] },
         maxResults: { maximum: 100 },
       });
       const readMany = tools.find((tool) => tool.name === 'memory_read_many');
@@ -266,6 +281,39 @@ describe('MCP read-only project tools', () => {
 
     expect(readFileSync(databasePath)).toEqual(beforeDatabase);
     expect(readFileSync(join(knowledgeRoot, 'security/overview.md'))).toEqual(beforeMarkdown);
+  });
+
+  it('serves semantic search through the MCP read-only search tool', async () => {
+    const { dataRoot, project, projectRoot } = fixture();
+    const provider = new McpFakeEmbeddingProvider();
+    await rebuildProjectIndexWithEmbeddings(projectRoot, project, {
+      provider,
+      model: 'embedding-v1',
+    });
+    const databasePath = resolveProjectDatabasePath(projectRoot);
+    const beforeDatabase = readFileSync(databasePath);
+
+    await withClient(dataRoot, async (client) => {
+      const result = await client.callTool({
+        name: 'memory_search',
+        arguments: {
+          project: 'demo',
+          query: 'authentication and identity control',
+          mode: 'semantic',
+          maxResults: 2,
+        },
+      });
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        project: 'demo',
+        results: expect.arrayContaining([
+          expect.objectContaining({ path: 'security/overview.md' }),
+        ]),
+      });
+      expect((result.structuredContent as { results: unknown[] }).results).toHaveLength(2);
+    }, () => ({ provider, model: 'embedding-v1' }));
+
+    expect(readFileSync(databasePath)).toEqual(beforeDatabase);
   });
 
   it('does not repair a stale full-text index during a read-only tool call', async () => {

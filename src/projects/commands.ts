@@ -15,7 +15,7 @@ import {
 } from '../logging/logger.js';
 import { validateInternalLinks } from '../markdown/link-validator.js';
 import { createConfiguredBuildProvider } from '../providers/configured-build-provider.js';
-import { isEmbeddingProvider, type AIProvider } from '../providers/provider.js';
+import { isEmbeddingProvider, type AIProvider, type EmbeddingProvider } from '../providers/provider.js';
 import { searchMarkdownDocuments } from '../markdown/search.js';
 import {
   searchProjectDocuments,
@@ -266,7 +266,7 @@ export function registerProjectCommands(
     .command('search <query>')
     .description('Search project Markdown documents')
     .requiredOption('--project <name>', 'Project to search')
-    .option('--mode <mode>', 'Retrieval mode: path, hierarchical, fulltext, or hybrid')
+    .option('--mode <mode>', 'Retrieval mode: path, hierarchical, fulltext, semantic, or hybrid')
     .option('--max-depth <depth>', 'Maximum hierarchy depth')
     .option('--max-results <count>', 'Maximum number of results')
     .option('--max-tokens <count>', 'Maximum estimated context tokens')
@@ -284,7 +284,7 @@ export function registerProjectCommands(
         maxRelatedResults?: string;
       },
     ) => {
-      await withProjectRuntime(runtimeFactory, async ({ dataRoot }) => {
+      await withProjectRuntime(runtimeFactory, async ({ dataRoot, settings: runtimeSettings }) => {
         const projectName = validateProjectName(options.project);
         const projectMetadata = listProjects(dataRoot).find(
           ({ name }) => name === projectName,
@@ -303,12 +303,11 @@ export function registerProjectCommands(
               suggestedAction: 'Use --mode hierarchical with --max-depth.',
             });
           }
-          const results = searchProjectDocuments({
+          const request = {
             projectRoot: join(dataRoot, 'projects', projectName),
             project: projectMetadata,
             projectId: projectMetadata.id,
             query,
-            mode,
             maxDepth: parseOptionalLimit(options.maxDepth, 'Maximum depth'),
             maxResults: parseOptionalLimit(options.maxResults, 'Maximum results'),
             includeRelated: options.includeRelated,
@@ -316,7 +315,18 @@ export function registerProjectCommands(
               options.maxRelatedResults,
               'Maximum related results',
             ),
-          });
+          };
+          const results = mode === 'semantic'
+            ? await searchProjectDocuments({
+                ...request,
+                mode,
+                embeddingProvider: requireEmbeddingProvider(
+                  providerFactory(runtimeSettings ?? loadSettings({ paths: resolveSettingsPaths() })),
+                ),
+                embeddingModel:
+                  runtimeSettings?.ai?.embedding_model ?? 'text-embedding-3-small',
+              })
+            : searchProjectDocuments({ ...request, mode });
           const tokenBudget = maxTokens === undefined
             ? undefined
             : selectRetrievalResultsWithinTokenBudget(
@@ -387,11 +397,22 @@ export function registerProjectCommands(
 }
 
 function parseRetrievalMode(value: string): RetrievalMode {
-  if (value === 'path' || value === 'hierarchical' || value === 'fulltext' || value === 'hybrid') {
+  if (
+    value === 'path' || value === 'hierarchical' || value === 'fulltext' ||
+    value === 'semantic' || value === 'hybrid'
+  ) {
     return value;
   }
   throw new InputError(`Unsupported retrieval mode: ${value}`, {
-    suggestedAction: 'Use --mode path, --mode hierarchical, --mode fulltext, or --mode hybrid.',
+    suggestedAction:
+      'Use --mode path, --mode hierarchical, --mode fulltext, --mode semantic, or --mode hybrid.',
+  });
+}
+
+function requireEmbeddingProvider(provider: AIProvider): EmbeddingProvider {
+  if (isEmbeddingProvider(provider)) return provider;
+  throw new InputError('The configured provider does not support embeddings.', {
+    suggestedAction: 'Choose an embedding-capable provider and run qlm reindex before semantic search.',
   });
 }
 
