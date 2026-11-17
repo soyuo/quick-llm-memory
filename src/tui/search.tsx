@@ -6,7 +6,7 @@ import { listProjects } from '../projects/manager.js';
 import type { ProjectMetadata } from '../projects/schema.js';
 import {
   searchProjectDocuments,
-  type RetrievalMode,
+  type SynchronousRetrievalMode,
   type RetrievalSearchResult,
 } from '../retrieval/search.js';
 import { sanitizeTerminalText } from './terminal-text.js';
@@ -29,7 +29,7 @@ export interface SearchProps {
   onExit?: () => void;
 }
 
-const SEARCH_MODES: RetrievalMode[] = ['path', 'hierarchical', 'fulltext', 'hybrid'];
+const SEARCH_MODES: SynchronousRetrievalMode[] = ['path', 'hierarchical', 'fulltext', 'hybrid'];
 const MAX_SEARCH_RESULTS = 20;
 const RESULT_WINDOW_SIZE = 8;
 const DOCUMENT_LINES = 10;
@@ -57,7 +57,7 @@ export function Search({
   );
   const project = projectSnapshot.projects[projectIndex];
   const [query, setQuery] = useState('');
-  const [mode, setMode] = useState<RetrievalMode>('hybrid');
+  const [mode, setMode] = useState<SynchronousRetrievalMode>('hybrid');
   const [focus, setFocus] = useState<SearchFocus>('query');
   const [results, setResults] = useState<RetrievalSearchResult[]>([]);
   const [resultCursor, setResultCursor] = useState(0);

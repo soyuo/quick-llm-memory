@@ -1,14 +1,17 @@
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { ConfigurationError } from '../config/error.js';
-import { InputError } from '../errors/qlm-error.js';
+import { InputError, InternalError, QLMError } from '../errors/qlm-error.js';
 import { readStoredMarkdownSource } from '../markdown/repository.js';
 import { openProjectDatabaseReadOnly } from '../database/database.js';
 import { rebuildProjectIndex } from '../database/reindex.js';
+import type { EmbeddingProvider } from '../providers/provider.js';
+import { ProviderError } from '../providers/provider-error.js';
 import type { ProjectMetadata } from '../projects/schema.js';
 import { reciprocalRankFusionRanker, type RankedSearchSource, type RetrievalRanker } from './ranker.js';
 
-export type RetrievalMode = 'path' | 'hierarchical' | 'fulltext' | 'hybrid';
+export type RetrievalMode = 'path' | 'hierarchical' | 'fulltext' | 'semantic' | 'hybrid';
+export type SynchronousRetrievalMode = Exclude<RetrievalMode, 'semantic'>;
 
 export interface SearchRequest {
   projectId: string;
@@ -26,7 +29,15 @@ export interface RetrievalSearchRequest extends SearchRequest {
   ranker?: RetrievalRanker;
   /** Disable automatic index rebuilding for read-only integrations such as MCP. */
   synchronizeStaleIndex?: boolean;
+  embeddingProvider?: EmbeddingProvider;
+  embeddingModel?: string;
 }
+
+export type SemanticRetrievalSearchRequest = RetrievalSearchRequest & {
+  mode: 'semantic';
+  embeddingProvider: EmbeddingProvider;
+  embeddingModel: string;
+};
 
 export interface SearchResult {
   documentId: string;
@@ -49,13 +60,42 @@ const DEFAULT_MAX_DEPTH = 5;
 const DEFAULT_MAX_RELATED_RESULTS = 5;
 const MAX_RELATED_RESULTS = 20;
 const MAX_SNIPPET_LENGTH = 160;
+const MAX_SEMANTIC_QUERY_LENGTH = 8_192;
+
+interface SemanticEmbeddingRow {
+  document_id: string;
+  path: string;
+  content_hash: string;
+  kind: 'document' | 'section';
+  section_id: string;
+  model: string;
+  dimensions: number;
+  vector_json: string;
+}
+
+interface SemanticCandidate {
+  documentId: string;
+  path: string;
+  contentHash: string;
+  score: number;
+  matchedSections: string[];
+}
 
 export function searchProjectDocuments(
+  request: SemanticRetrievalSearchRequest,
+): Promise<RetrievalSearchResult[]>;
+export function searchProjectDocuments(
+  request: RetrievalSearchRequest & { mode: SynchronousRetrievalMode },
+): RetrievalSearchResult[];
+export function searchProjectDocuments(
   request: RetrievalSearchRequest,
-): RetrievalSearchResult[] {
-  if (!['path', 'hierarchical', 'fulltext', 'hybrid'].includes(request.mode)) {
+): RetrievalSearchResult[] | Promise<RetrievalSearchResult[]>;
+export function searchProjectDocuments(
+  request: RetrievalSearchRequest,
+): RetrievalSearchResult[] | Promise<RetrievalSearchResult[]> {
+  if (!['path', 'hierarchical', 'fulltext', 'semantic', 'hybrid'].includes(request.mode)) {
     throw new InputError('Unsupported retrieval mode.', {
-      suggestedAction: 'Use path, hierarchical, fulltext, or hybrid retrieval.',
+      suggestedAction: 'Use path, hierarchical, fulltext, semantic, or hybrid retrieval.',
     });
   }
   const maxResults = validateLimit(request.maxResults, DEFAULT_MAX_RESULTS, 'maxResults');
@@ -89,6 +129,17 @@ export function searchProjectDocuments(
     throw new InputError('The retrieval project ID does not match project metadata.');
   }
 
+  if (request.mode === 'semantic') {
+    if (request.embeddingProvider === undefined || request.embeddingModel?.trim() === undefined ||
+        request.embeddingModel.trim().length === 0) {
+      throw new InputError('Semantic retrieval requires an embedding provider and model.', {
+        suggestedAction: 'Configure an embedding provider and rebuild the project index with qlm reindex.',
+      });
+    }
+    if (maxResults === 0) return Promise.resolve([]);
+    return searchSemanticDocuments(request as SemanticRetrievalSearchRequest, query, maxResults);
+  }
+
   return searchIndexedDocuments(
     request,
     query,
@@ -96,6 +147,202 @@ export function searchProjectDocuments(
     maxResults,
     request.synchronizeStaleIndex !== false,
   );
+}
+
+async function searchSemanticDocuments(
+  request: SemanticRetrievalSearchRequest,
+  query: string,
+  maxResults: number,
+): Promise<RetrievalSearchResult[]> {
+  if (query.length > MAX_SEMANTIC_QUERY_LENGTH) {
+    throw new InputError(`Semantic query must not exceed ${MAX_SEMANTIC_QUERY_LENGTH} characters.`);
+  }
+  const model = request.embeddingModel.trim();
+  const metadata = readCurrentEmbeddingMetadata(request, model);
+  if (metadata === undefined) return [];
+
+  let queryVectors: number[][];
+  try {
+    queryVectors = await request.embeddingProvider.embed([query], model);
+  } catch (cause) {
+    if (cause instanceof QLMError) throw cause;
+    throw new InternalError('Semantic query embedding failed.', {
+      suggestedAction: 'Check the embedding provider configuration and retry the search.',
+      cause,
+    });
+  }
+  const queryVector = queryVectors[0];
+  if (
+    queryVectors.length !== 1 || queryVector === undefined ||
+    queryVector.length !== metadata.dimensions || queryVector.length === 0 ||
+    queryVector.some((value) => !Number.isFinite(value))
+  ) {
+    throw new ProviderError('The embedding provider returned an incompatible query vector.', {
+      suggestedAction: 'Check the embedding model and rebuild the project index with qlm reindex.',
+    });
+  }
+
+  const database = openProjectDatabaseReadOnly(request.projectRoot, request.project);
+  const candidates = new Map<string, SemanticCandidate>();
+  try {
+    const currentMetadata = database.prepare(`
+      SELECT provider_id, model, dimensions, updated_at
+      FROM project_embedding_metadata WHERE project_id = ?
+    `).get(request.project.id) as typeof metadata | undefined;
+    if (
+      currentMetadata === undefined || currentMetadata.updated_at !== metadata.updated_at ||
+      currentMetadata.provider_id !== request.embeddingProvider.id ||
+      currentMetadata.model !== model || currentMetadata.dimensions !== metadata.dimensions
+    ) {
+      throw staleEmbeddingIndexError();
+    }
+    const statement = database.prepare(`
+      SELECT e.document_id, d.path, d.content_hash, e.kind, e.section_id,
+        e.model, e.dimensions, e.vector_json
+      FROM document_embeddings e
+      JOIN documents d ON d.id = e.document_id AND d.project_id = e.project_id
+      WHERE e.project_id = ?
+      ORDER BY d.path, e.kind, e.section_id
+    `);
+    for (const row of statement.iterate(request.project.id) as Iterable<SemanticEmbeddingRow>) {
+      if (row.model !== model || row.dimensions !== metadata.dimensions) {
+        throw staleEmbeddingIndexError();
+      }
+      let vector: unknown;
+      try {
+        vector = JSON.parse(row.vector_json) as unknown;
+      } catch {
+        throw staleEmbeddingIndexError();
+      }
+      if (
+        !Array.isArray(vector) || vector.length !== metadata.dimensions ||
+        vector.length === 0 || vector.some((value) => typeof value !== 'number' || !Number.isFinite(value))
+      ) {
+        throw staleEmbeddingIndexError();
+      }
+      const score = cosineSimilarity(queryVector, vector as number[]);
+      const current = candidates.get(row.document_id);
+      if (current === undefined || score > current.score) {
+        candidates.set(row.document_id, {
+          documentId: row.document_id,
+          path: row.path,
+          contentHash: row.content_hash,
+          score,
+          matchedSections: row.kind === 'section' ? [row.section_id] : [],
+        });
+      } else if (score === current.score && row.kind === 'section') {
+        current.matchedSections.push(row.section_id);
+      }
+    }
+    const documentCount = database.prepare(
+      'SELECT count(*) AS count FROM documents WHERE project_id = ?',
+    ).get(request.project.id) as { count: number };
+    const documentVectorCount = database.prepare(`
+      SELECT count(*) AS count FROM document_embeddings
+      WHERE project_id = ? AND kind = 'document'
+    `).get(request.project.id) as { count: number };
+    if (
+      documentVectorCount.count !== documentCount.count ||
+      candidates.size !== documentCount.count
+    ) {
+      throw staleEmbeddingIndexError();
+    }
+  } finally {
+    database.close();
+  }
+
+  const ranked = [...candidates.values()].sort((left, right) =>
+    right.score - left.score || left.path.localeCompare(right.path) ||
+    left.documentId.localeCompare(right.documentId)
+  ).slice(0, maxResults);
+  const primaryResults = ranked.map((candidate) => {
+    let source: ReturnType<typeof readStoredMarkdownSource>;
+    try {
+      source = readStoredMarkdownSource(joinKnowledgeRoot(request.projectRoot), candidate.path);
+    } catch {
+      throw staleIndexError(candidate.path);
+    }
+    const document = source.document;
+    const contentHash = createHash('sha256').update(source.sourceText).digest('hex');
+    if (
+      document.metadata.type !== 'document' || document.metadata.id !== candidate.documentId ||
+      contentHash !== candidate.contentHash
+    ) {
+      throw staleIndexError(candidate.path);
+    }
+    const content = document.body.replace(/\s+/g, ' ').trim();
+    return {
+      documentId: candidate.documentId,
+      path: candidate.path,
+      title: document.metadata.title,
+      snippet: content.length <= MAX_SNIPPET_LENGTH
+        ? content
+        : `${content.slice(0, MAX_SNIPPET_LENGTH - 3).trimEnd()}...`,
+      score: candidate.score,
+      sourceIds: [...(document.metadata.source_ids ?? [])],
+      matchedSections: [...new Set(candidate.matchedSections)].sort(),
+      tokenCount: Math.max(1, Math.ceil(document.body.length / 4)),
+    } satisfies RetrievalSearchResult;
+  });
+  return request.includeRelated === true
+    ? appendRelatedResults(request, primaryResults, request.maxRelatedResults ?? DEFAULT_MAX_RELATED_RESULTS)
+    : primaryResults;
+}
+
+function readCurrentEmbeddingMetadata(
+  request: SemanticRetrievalSearchRequest,
+  model: string,
+): { provider_id: string; model: string; dimensions: number; updated_at: string } | undefined {
+  let database: ReturnType<typeof openProjectDatabaseReadOnly>;
+  try {
+    database = openProjectDatabaseReadOnly(request.projectRoot, request.project);
+  } catch {
+    throw staleEmbeddingIndexError();
+  }
+  try {
+    const documentCount = database.prepare(
+      'SELECT count(*) AS count FROM documents WHERE project_id = ?',
+    ).get(request.project.id) as { count: number };
+    if (documentCount.count === 0) return undefined;
+    const metadata = database.prepare(`
+      SELECT provider_id, model, dimensions, updated_at
+      FROM project_embedding_metadata WHERE project_id = ?
+    `).get(request.project.id) as {
+      provider_id: string; model: string; dimensions: number; updated_at: string;
+    } | undefined;
+    if (
+      metadata === undefined || metadata.provider_id !== request.embeddingProvider.id ||
+      metadata.model !== model || !Number.isSafeInteger(metadata.dimensions) || metadata.dimensions < 1
+    ) {
+      throw staleEmbeddingIndexError();
+    }
+    return metadata;
+  } finally {
+    database.close();
+  }
+}
+
+function cosineSimilarity(left: number[], right: number[]): number {
+  let dot = 0;
+  let leftMagnitude = 0;
+  let rightMagnitude = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    const leftValue = left[index]!;
+    const rightValue = right[index]!;
+    dot += leftValue * rightValue;
+    leftMagnitude += leftValue * leftValue;
+    rightMagnitude += rightValue * rightValue;
+  }
+  if (leftMagnitude === 0 || rightMagnitude === 0) return 0;
+  const similarity = dot / Math.sqrt(leftMagnitude * rightMagnitude);
+  if (!Number.isFinite(similarity)) throw staleEmbeddingIndexError();
+  return similarity;
+}
+
+function staleEmbeddingIndexError(): InputError {
+  return new InputError('The project embedding index is missing, stale, or incompatible.', {
+    suggestedAction: 'Verify ai.embedding_model and run qlm reindex to rebuild the project vectors.',
+  });
 }
 
 function searchIndexedDocuments(

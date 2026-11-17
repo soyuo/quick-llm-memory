@@ -10,10 +10,12 @@ import {
   searchProjectDocuments,
   type RetrievalSearchRequest,
   type RetrievalSearchResult,
+  type SynchronousRetrievalMode,
 } from './search.js';
 import { selectCandidatesWithinTokenBudget } from './token-budget.js';
 
-export interface RetrievalContextRequest extends RetrievalSearchRequest {
+export interface RetrievalContextRequest extends Omit<RetrievalSearchRequest, 'mode'> {
+  mode: SynchronousRetrievalMode;
   maxTokens: number;
 }
 
