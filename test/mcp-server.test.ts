@@ -165,16 +165,33 @@ describe('MCP server bootstrap', () => {
   });
 
   it('enforces remote Host and Origin allowlists before MCP dispatch', async () => {
+    const dataRoot = mkdtempSync(join(tmpdir(), 'qlm-mcp-origin-'));
+    initializeProject(dataRoot, 'sensitive-project');
     const server = await serveMcpHttp({
       host: '0.0.0.0', port: 0, allowRemote: true, confirmRemoteExposure: true,
       allowedHosts: ['127.0.0.1'], allowedOrigins: ['trusted.example'],
+      dataRoot,
     });
     const url = `http://127.0.0.1:${server.port}/mcp`;
+    const trustedHeaders = {
+      host: `127.0.0.1:${server.port}`,
+      origin: 'https://trusted.example',
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+    };
     try {
-      const allowed = await fetch(url, { method: 'GET', headers: { host: `127.0.0.1:${server.port}`, origin: 'https://trusted.example' } });
+      const initialized = await requestJson(url, trustedHeaders, {
+        jsonrpc: '2.0', id: 1, method: 'initialize',
+        params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'origin-test', version: '1.0.0' } },
+      });
+      expect(initialized.status).not.toBe(403);
+      const toolCall = { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'memory_list_projects', arguments: {} } };
+      const allowed = await requestJson(url, trustedHeaders, toolCall);
       expect(allowed.status).not.toBe(403);
-      const hostileOrigin = await fetch(url, { method: 'GET', headers: { host: `127.0.0.1:${server.port}`, origin: 'https://evil.example' } });
+      expect(allowed.body).toContain('sensitive-project');
+      const hostileOrigin = await requestJson(url, { ...trustedHeaders, origin: 'https://evil.example' }, toolCall);
       expect(hostileOrigin.status).toBe(403);
+      expect(hostileOrigin.body).not.toContain('sensitive-project');
       const malformedOrigin = await fetch(url, { method: 'GET', headers: { host: `127.0.0.1:${server.port}`, origin: 'not-an-origin' } });
       expect(malformedOrigin.status).toBe(403);
       const hostileHostStatus = await requestStatus(url, {
@@ -186,6 +203,7 @@ describe('MCP server bootstrap', () => {
       expect(missingOrigin.status).not.toBe(403);
     } finally {
       await server.close();
+      rmSync(dataRoot, { recursive: true, force: true });
     }
   });
 
@@ -373,3 +391,28 @@ function requestStatus(url: string, headers: Record<string, string>): Promise<nu
     request.end();
   });
 }
+
+function requestJson(
+  url: string,
+  headers: Record<string, string>,
+  payload: Record<string, unknown>,
+): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const requestUrl = new URL(url);
+    const request = httpRequest({
+      host: requestUrl.hostname,
+      port: Number(requestUrl.port),
+      path: requestUrl.pathname,
+      method: 'POST',
+      headers: { ...headers, 'content-length': Buffer.byteLength(JSON.stringify(payload)) },
+    }, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk: string) => { body += chunk; });
+      response.once('end', () => resolve({ status: response.statusCode ?? 0, body }));
+    });
+    request.once('error', reject);
+    request.end(JSON.stringify(payload));
+  });
+}
+
