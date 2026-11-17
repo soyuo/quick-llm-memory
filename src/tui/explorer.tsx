@@ -5,6 +5,7 @@ import { Box, Text, useApp, useInput } from 'ink';
 import { buildKnowledgeTree, type CategoryTreeNode, type DocumentTreeNode } from '../markdown/tree.js';
 import { readStoredMarkdownDocument } from '../markdown/repository.js';
 import type { DocumentFrontmatter } from '../markdown/schema.js';
+import { parseEditorCommand } from './editor-command.js';
 import { sanitizeTerminalText } from './terminal-text.js';
 
 type TreeEntry =
@@ -343,44 +344,4 @@ function collectDocuments(
 
 function writeClipboardPath(path: string): void {
   process.stdout.write(`\u001b]52;c;${Buffer.from(path).toString('base64')}\u0007`);
-}
-
-function parseEditorCommand(command: string): string[] | undefined {
-  const parts: string[] = [];
-  let current = '';
-  let quote: 'single' | 'double' | undefined;
-  let escaping = false;
-  const source = command.trim();
-  for (let index = 0; index < source.length; index += 1) {
-    const character = source[index]!;
-    if (escaping) {
-      current += character;
-      escaping = false;
-    } else if (character === '\\' && quote !== 'single') {
-      const next = source[index + 1];
-      if (next !== undefined && (/[\s"'\\]/u.test(next))) {
-        escaping = true;
-      } else {
-        current += character;
-      }
-    } else if (character === "'" && quote !== 'double') {
-      quote = quote === 'single' ? undefined : 'single';
-    } else if (character === '"' && quote !== 'single') {
-      quote = quote === 'double' ? undefined : 'double';
-    } else if (/\s/u.test(character) && quote === undefined) {
-      if (current.length > 0) {
-        parts.push(current);
-        current = '';
-      }
-    } else {
-      current += character;
-    }
-  }
-  if (escaping || quote !== undefined) {
-    return undefined;
-  }
-  if (current.length > 0) {
-    parts.push(current);
-  }
-  return parts.length === 0 ? undefined : parts;
 }

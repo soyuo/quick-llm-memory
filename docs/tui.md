@@ -12,6 +12,8 @@ Search queries the selected project with the existing path, hierarchical, full-t
 
 MCP Manager shows the supported Claude Code, Cursor, and VS Code stdio configuration targets. Use Left/Right or Up/Down to select a client and `c` to copy its JSON snippet through OSC 52; merge it into that client configuration manually. It lists the existing read-only tools, prompts, and resources. MCP tool-call execution logs are not currently recorded. Press `t` to launch a temporary local stdio server and list its tools, with an eight-second timeout and a one-megabyte protocol buffer cap. The process is stopped after the check. This is a local protocol check, not a persistent client connection. The CLI equivalent for printing a config is `qlm mcp config <client>`.
 
+Logs reads the existing JSONL application log and shows at most the newest 200 records from a 256 KiB tail, newest first. Tab or Left/Right switches between all, operations, errors, and MCP activity; the MCP view explains that tool calls are not recorded. Entries are converted to safe summaries instead of displaying raw log fields. Press `e` to open the fixed application log path with `VISUAL` or `EDITOR` (arguments are parsed without a shell), `x` to copy up to 50 sanitized summaries from the current view, and `r` to refresh. Missing, linked, or non-regular log paths show a generic status.
+
 ## Native build requirements
 
 Installing from source builds the small native helper used to publish project transfers atomically without replacing an existing destination. `npm install` or `npm ci` therefore needs the platform's C/C++ build tools and Python as required by [node-gyp](https://github.com/nodejs/node-gyp#installation). On Windows, install Python and Visual Studio's C++ build tools; on macOS, install Xcode Command Line Tools; on Linux, install Python, `make`, and a C/C++ compiler. Transfer publication fails closed on unsupported filesystems instead of using a non-atomic fallback.
@@ -42,6 +44,10 @@ Installing from source builds the small native helper used to publish project tr
 | q (Search) | Quit the TUI; when query is focused, enter `q` in the query |
 | Arrows (MCP Manager) | Select a supported client |
 | c / t (MCP Manager) | Copy config snippet / run bounded stdio check |
+| Tab / Left / Right (Logs) | Change log view |
+| Up / Down (Logs) | Select a log entry |
+| e (Logs) | Open the application log with `VISUAL` or `EDITOR` |
+| x (Logs) | Copy a sanitized excerpt from the current view |
 | Tab (Build wizard) | Move between setting fields |
 | Arrow keys (Build wizard choices) | Change the provider or toggle boolean settings |
 | Space (Build wizard toggles) | Toggle boolean settings |
