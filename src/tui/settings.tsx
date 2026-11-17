@@ -9,7 +9,7 @@ import { sanitizeTerminalText } from './terminal-text.js';
 
 const PROVIDERS = ['openai', 'openai-compatible'] as const;
 const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace'] as const;
-const FIELD_NAMES = ['Provider', 'Model', 'Logging level'] as const;
+const FIELD_NAMES = ['Provider', 'Model', 'Logging level', 'Generation response cache'] as const;
 
 export interface SettingsScreenProps {
   paths: SettingsPaths;
@@ -70,6 +70,9 @@ export function SettingsScreen({ paths, onBack, onExit }: SettingsScreenProps): 
       const direction = key.rightArrow ? 1 : -1;
       setLoaded({ values: { ...values, loggingLevel: cycleValue(LOG_LEVELS, values.loggingLevel, direction) } });
       setMessage(undefined);
+    } else if (fieldIndex === 3 && (key.leftArrow || key.rightArrow)) {
+      setLoaded({ values: { ...values, cacheGeneration: !values.cacheGeneration } });
+      setMessage(undefined);
     } else if (fieldIndex === 1 && key.return) {
       setModelDraft(values.model);
       setEditingModel(true);
@@ -79,6 +82,7 @@ export function SettingsScreen({ paths, onBack, onExit }: SettingsScreenProps): 
         const parsed = settingsSchema.parse({
           ai: {
             provider: values.provider,
+            cache_generation: values.cacheGeneration,
             ...(values.model.length > 0 ? { model: values.model } : {}),
           },
           logging: { level: values.loggingLevel },
@@ -107,7 +111,9 @@ export function SettingsScreen({ paths, onBack, onExit }: SettingsScreenProps): 
           <Text>{fieldIndex === 0 ? '›' : ' '} AI Provider: {sanitizeTerminalText(values.provider)}</Text>
           <Text>{fieldIndex === 1 ? '›' : ' '} AI Model: {sanitizeTerminalText(editingModel ? `${modelDraft}▏` : (values.model || '(not set)'))}</Text>
           <Text>{fieldIndex === 2 ? '›' : ' '} Logging level: {sanitizeTerminalText(values.loggingLevel)}</Text>
-          <Text>Press s to validate and save; Left/Right changes provider or logging level.</Text>
+          <Text>{fieldIndex === 3 ? '> ' : '  '}Generation response cache: {values.cacheGeneration ? 'Enabled' : 'Disabled'}</Text>
+          <Text>Disable generation caching when working with sensitive source documents.</Text>
+          <Text>Press s to validate and save; Left/Right changes provider, logging level, or cache setting.</Text>
         </>
       )}
       {message ? <Text>{sanitizeTerminalText(message)}</Text> : null}
@@ -128,6 +134,7 @@ function toEditableSettings(settings: Settings): EditableSettingsValues {
   return {
     provider: settings.ai?.provider ?? 'openai',
     model: settings.ai?.model ?? '',
+    cacheGeneration: settings.ai?.cache_generation ?? true,
     loggingLevel: settings.logging.level,
   };
 }

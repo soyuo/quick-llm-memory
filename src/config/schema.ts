@@ -13,6 +13,7 @@ export const settingsSchema = z
       .object({
         provider: z.enum(['openai', 'openai-compatible']).default('openai'),
         model: z.string().trim().min(1).optional(),
+        cache_generation: z.boolean().default(true),
       })
       .passthrough()
       .optional(),
