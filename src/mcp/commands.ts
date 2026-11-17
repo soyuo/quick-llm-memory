@@ -14,7 +14,7 @@ import type { ServeMcpHttpOptions } from './http-server.js';
 
 export interface McpCommandOptions {
   serveStdio?: () => StdioServerHandle | Promise<StdioServerHandle>;
-  serveHttp?: (options: Pick<ServeMcpHttpOptions, 'host' | 'port'>) =>
+  serveHttp?: (options: Pick<ServeMcpHttpOptions, 'host' | 'port' | 'managedInstanceId'>) =>
     McpHttpServerHandle | Promise<McpHttpServerHandle>;
   registerHttpShutdown?: (handler: () => Promise<void>) => () => void;
   stdioServerConfig?: McpStdioServerConfig;
@@ -48,10 +48,14 @@ export function registerMcpCommands(
         .argParser(parseHttpPort)
         .default(8765),
     )
-    .action(async ({ transport, host, port }: {
+    .addOption(
+      new Option('--managed-instance-id <id>').hideHelp(),
+    )
+    .action(async ({ transport, host, port, managedInstanceId }: {
       transport: string;
       host: string;
       port: number;
+      managedInstanceId?: string;
     }) => {
       if (transport === 'stdio') {
         await startStdioServer();
@@ -59,7 +63,14 @@ export function registerMcpCommands(
       }
 
       if (transport === 'http') {
-        const handle = await startHttpServer({ host, port });
+        if (managedInstanceId !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(managedInstanceId)) {
+          throw new InputError('Invalid managed MCP instance identity.');
+        }
+        const handle = await startHttpServer({
+          host,
+          port,
+          ...(managedInstanceId === undefined ? {} : { managedInstanceId }),
+        });
         const writeError = options.writeError ?? ((text) => process.stderr.write(text));
         writeError(`MCP HTTP server listening at ${handle.url}\n`);
         let removeShutdownHandlers = () => {};

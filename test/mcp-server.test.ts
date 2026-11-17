@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -50,6 +51,48 @@ describe('MCP server bootstrap', () => {
     } finally {
       await client.close().catch(() => {});
       await server.close();
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('exposes an instance-verified management status and graceful stop route', async () => {
+    const dataRoot = mkdtempSync(join(tmpdir(), 'qlm-mcp-managed-'));
+    const instanceId = randomUUID();
+    const server = await serveMcpHttp({
+      host: '127.0.0.1',
+      port: 0,
+      dataRoot,
+      managedInstanceId: instanceId,
+    });
+    const statusUrl = new URL('/__qlm/manager/status', server.url);
+    const identityHeader = { 'x-qlm-instance-id': instanceId };
+
+    try {
+      const denied = await fetch(statusUrl, {
+        headers: { 'x-qlm-instance-id': randomUUID() },
+      });
+      expect(denied.status).toBe(404);
+
+      const status = await fetch(statusUrl, { headers: identityHeader });
+      expect(status.status).toBe(200);
+      await expect(status.json()).resolves.toMatchObject({
+        pid: process.pid,
+        host: '127.0.0.1',
+        port: server.port,
+        instanceId,
+        commandIdentity: expect.stringMatching(/^[a-f0-9]{64}$/),
+        startedAt: expect.stringMatching(/^\d{4}-\d\d-/),
+      });
+
+      const stopped = await fetch(new URL('/__qlm/manager/stop', server.url), {
+        method: 'POST',
+        headers: identityHeader,
+      });
+      expect(stopped.status).toBe(202);
+      await server.close();
+      await expect(fetch(statusUrl, { headers: identityHeader })).rejects.toThrow();
+    } finally {
+      await server.close().catch(() => {});
       rmSync(dataRoot, { recursive: true, force: true });
     }
   });
