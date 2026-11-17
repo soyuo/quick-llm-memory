@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { render } from 'ink-testing-library';
 import { afterEach, describe, expect, it } from 'vitest';
-import { resolveProjectDatabasePath } from '../src/database/database.js';
+import { openProjectDatabaseReadOnly, resolveProjectDatabasePath } from '../src/database/database.js';
+import { rebuildProjectIndex } from '../src/database/reindex.js';
 import { initializeProject, listProjects } from '../src/projects/manager.js';
 import { MarkdownDocumentParser } from '../src/knowledge/markdown-parser.js';
 import { loadMarkdownSources } from '../src/knowledge/source.js';
@@ -199,7 +200,74 @@ describe('TUI knowledge build setup wizard', () => {
     expect(provider.requests.map(({ schemaName }) => schemaName)).toEqual(['qlm_knowledge_hierarchy']);
     app.unmount();
   });
+
+  it('shows generation failures and preserves existing knowledge and index rows', async () => {
+    const dataRoot = createTemporaryRoot('qlm-wizard-failure-data-');
+    const sourceRoot = createTemporaryRoot('qlm-wizard-failure-source-');
+    const sourceFile = join(sourceRoot, 'notes.md');
+    writeFileSync(sourceFile, '# Notes\n\nSource material.\n');
+    const project = initializeProject(dataRoot, 'quick-llm');
+    const projectRoot = join(dataRoot, 'projects', project.name);
+    const knowledgeRoot = join(projectRoot, 'knowledge');
+    mkdirSync(knowledgeRoot, { recursive: true });
+    const existingPath = join(knowledgeRoot, 'existing.md');
+    const existingMarkdown = existingDocument('existing', 'Existing');
+    writeFileSync(existingPath, existingMarkdown);
+    rebuildProjectIndex(projectRoot, project);
+    const source = loadMarkdownSources(sourceFile)[0];
+    if (source === undefined) throw new Error('Expected a Markdown source fixture.');
+    const parsed = await new MarkdownDocumentParser().parse(source);
+    const provider = new FakeWizardProvider([{
+      id: 'notes', name: 'Notes', type: 'document', path: 'notes.md',
+      description: 'Source notes.', sourceSectionIds: parsed.sections.map(({ id }) => id),
+      relatedDocumentIds: [], children: [],
+    }], undefined, true);
+    const app = render(
+      <TuiApp columns={120} rows={30} dataRoot={dataRoot} buildProviderFactory={() => provider} />,
+    );
+
+    await enterBuildAnalysis(app, sourceFile);
+    await waitForFrame(app, '8/12 Structure Preview');
+    app.stdin.write('\r');
+    await flushInkEffects();
+    app.stdin.write('y');
+    await waitForFrame(app, 'Build Failed');
+
+    expect(app.lastFrame()).toContain('Simulated document generation failure.');
+    expect(readFileSync(existingPath, 'utf8')).toBe(existingMarkdown);
+    const database = openProjectDatabaseReadOnly(projectRoot, project);
+    try {
+      expect(database.prepare('SELECT id, path FROM documents').all()).toEqual([
+        { id: 'existing', path: 'existing.md' },
+      ]);
+    } finally {
+      database.close();
+    }
+    expect(existsSync(join(knowledgeRoot, 'notes.md'))).toBe(false);
+    app.unmount();
+  });
 });
+
+function existingDocument(id: string, title: string): string {
+  return [
+    '---',
+    'schema_version: 1',
+    `id: ${id}`,
+    `title: ${title}`,
+    'type: document',
+    'depth: 1',
+    'status: draft',
+    'source_ids: []',
+    'source_sections: []',
+    'related: []',
+    '---',
+    '',
+    `# ${title}`,
+    '',
+    'Existing verified content.',
+    '',
+  ].join('\n');
+}
 
 function createTemporaryRoot(prefix: string): string {
   const root = mkdtempSync(join(tmpdir(), prefix));
@@ -228,6 +296,17 @@ async function waitForFrame(app: ReturnType<typeof render>, text: string): Promi
   expect(app.lastFrame()).toContain(text);
 }
 
+async function waitForFrameContainingAny(
+  app: ReturnType<typeof render>,
+  texts: readonly string[],
+): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (texts.some((text) => app.lastFrame()?.includes(text))) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+  expect(texts.some((text) => app.lastFrame()?.includes(text))).toBe(true);
+}
+
 class FakeWizardProvider implements AIProvider {
   readonly id = 'fake-wizard-provider';
   readonly requests: StructuredRequest<unknown>[] = [];
@@ -235,6 +314,7 @@ class FakeWizardProvider implements AIProvider {
   constructor(
     private readonly hierarchy: HierarchyNode[],
     private readonly beforePlanning?: (request: StructuredRequest<unknown>) => Promise<void>,
+    private readonly failDocumentGeneration = false,
   ) {}
 
   async listModels(): Promise<ModelInfo[]> { return []; }
@@ -247,6 +327,7 @@ class FakeWizardProvider implements AIProvider {
       await this.beforePlanning?.(request as StructuredRequest<unknown>);
       return { hierarchy: this.hierarchy } as T;
     }
+    if (this.failDocumentGeneration) throw new Error('Simulated document generation failure.');
     return { body: 'Generated knowledge document.', inferences: [] } as T;
   }
   async countTokens(_text: string, _model: string): Promise<TokenCount> {
@@ -274,5 +355,5 @@ async function enterBuildAnalysis(app: ReturnType<typeof render>, sourceFile: st
   await flushInkEffects();
   app.stdin.write('\r');
   await flushInkEffects();
-  await waitForFrame(app, '7/12 Analysis');
+  await waitForFrameContainingAny(app, ['7/12 Analysis', '8/12 Structure Preview']);
 }
