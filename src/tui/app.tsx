@@ -20,6 +20,7 @@ import { Explorer } from './explorer.js';
 import { Search } from './search.js';
 import { McpManager } from './mcp-manager.js';
 import { SettingsScreen } from './settings.js';
+import { Logs } from './logs.js';
 import { loadTuiDashboardSnapshot } from './dashboard.js';
 import type { Settings } from '../config/schema.js';
 import type { AIProvider } from '../providers/provider.js';
@@ -185,6 +186,10 @@ export function TuiApp({
     }
 
     if (activeScreen === 'Settings') {
+      return;
+    }
+
+    if (activeScreen === 'Logs') {
       return;
     }
 
@@ -613,6 +618,16 @@ export function TuiApp({
       ) : activeScreen === 'Settings' ? (
         <SettingsScreen
           paths={resolvedSettingsPaths}
+          onBack={() => {
+            setActiveScreen(undefined);
+            setFocusedPane('navigation');
+          }}
+          onExit={onExit}
+        />
+      ) : activeScreen === 'Logs' ? (
+        <Logs
+          dataRoot={root}
+          {...(copyText === undefined ? {} : { copyText })}
           onBack={() => {
             setActiveScreen(undefined);
             setFocusedPane('navigation');
