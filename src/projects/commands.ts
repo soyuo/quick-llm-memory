@@ -1,11 +1,13 @@
 import { join } from 'node:path';
+import { createInterface } from 'node:readline/promises';
+import { stdin, stdout } from 'node:process';
 import type { Command } from 'commander';
 import { ConfigurationError } from '../config/error.js';
 import { loadSettings } from '../config/settings.js';
 import { resolveSettingsPaths } from '../config/paths.js';
 import { InputError } from '../errors/qlm-error.js';
 import type { Settings } from '../config/schema.js';
-import { createProjectSnapshot, listProjectSnapshots } from './snapshots.js';
+import { createProjectSnapshot, listProjectFilePaths, listProjectSnapshots, restoreProjectSnapshot } from './snapshots.js';
 import { rebuildProjectIndex, rebuildProjectIndexWithEmbeddings } from '../database/reindex.js';
 import {
   createApplicationLogger,
@@ -47,6 +49,7 @@ export interface ProjectCommandOptions {
   runtimeFactory?: () => ProjectCommandRuntime;
   providerFactory?: (settings: Settings) => AIProvider;
   writeOut?: (text: string) => void;
+  confirmSnapshotRestore?: (paths: readonly string[]) => Promise<boolean>;
 }
 
 export function registerProjectCommands(
@@ -72,6 +75,32 @@ export function registerProjectCommands(
       if (!project) throw new InputError(`Project not found: ${projectName}`);
       const results = listProjectSnapshots(dataRoot, project.id);
       writeOut(results.length ? results.map(({ id, createdAt, files }) => `${id} ${createdAt} ${files.length} files`).join('\n') + '\n' : `No snapshots for ${project.name}.\n`);
+    });
+  });
+  snapshot.command('restore <project> <id>').description('Restore a verified project snapshot')
+    .option('--yes', 'confirm replacing project files')
+    .action(async (projectName: string, snapshotId: string, restoreOptions: { yes?: boolean }) => {
+    await withProjectRuntime(runtimeFactory, async ({ dataRoot }) => {
+      const project = listProjects(dataRoot).find(({ name }) => name === validateProjectName(projectName));
+      if (!project) throw new InputError(`Project not found: ${projectName}`);
+      const target = listProjectSnapshots(dataRoot, project.id).find(({ id }) => id === snapshotId);
+      if (!target) throw new InputError('Snapshot not found for this project.');
+      const existingPaths = listProjectFilePaths(join(dataRoot, 'projects', project.name));
+      const affected = [...new Set([...existingPaths, ...target.files.map(({ path }) => path)])].sort();
+      writeOut(`Restore will replace project files:\n${affected.map((path) => `- ${path}`).join('\n')}\n- Rebuild the project's SQLite index files (including WAL/SHM sidecars)\n`);
+      let confirmed = Boolean(restoreOptions.yes);
+      if (!confirmed && options.confirmSnapshotRestore) confirmed = await options.confirmSnapshotRestore(affected);
+      else if (!confirmed && stdin.isTTY) {
+        const prompt = createInterface({ input: stdin, output: stdout });
+        try { confirmed = (await prompt.question('Type yes to continue: ')).trim() === 'yes'; }
+        finally { prompt.close(); }
+      }
+      if (!confirmed) throw new InputError('Snapshot restore requires explicit confirmation. Use --yes or confirm interactively.');
+      const projectRoot = join(dataRoot, 'projects', project.name);
+      const restored = await restoreProjectSnapshot(dataRoot, project.id, project.name, snapshotId, () => {
+        rebuildProjectIndex(projectRoot, project);
+      });
+      writeOut(`Restored snapshot ${restored.id} for ${project.name}; rebuilt index with ${restored.files.length} snapshot files.\n`);
     });
   });
 
