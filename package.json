@@ -8,6 +8,7 @@
     "node": "^24.11.0 || >=26.0.0"
   },
   "scripts": {
+    "benchmark:phase9": "npm run build && node scripts/benchmark-phase9.mjs",
     "build": "tsup",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
