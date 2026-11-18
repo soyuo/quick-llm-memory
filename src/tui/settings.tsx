@@ -7,7 +7,7 @@ import { settingsSchema, type Settings } from '../config/schema.js';
 import { updateSettings, type EditableSettingsValues } from '../config/settings-editor.js';
 import { sanitizeTerminalText } from './terminal-text.js';
 
-const PROVIDERS = ['openai', 'openai-compatible'] as const;
+const PROVIDERS = ['openai', 'openai-compatible', 'codex-cli', 'claude-code'] as const;
 const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace'] as const;
 const FIELD_NAMES = ['Provider', 'Model', 'Embedding model', 'Logging level', 'Generation response cache'] as const;
 
@@ -125,6 +125,9 @@ export function SettingsScreen({ paths, onBack, onExit }: SettingsScreenProps): 
           <Text>{fieldIndex === 2 ? '›' : ' '} Embedding model: {sanitizeTerminalText(editingModel === 'embeddingModel' ? `${modelDraft}▏` : values.embeddingModel)}</Text>
           <Text>{fieldIndex === 3 ? '›' : ' '} Logging level: {sanitizeTerminalText(values.loggingLevel)}</Text>
           <Text>{fieldIndex === 4 ? '›' : ' '} Generation response cache: {values.cacheGeneration ? 'Enabled' : 'Disabled'}</Text>
+          {values.provider === 'codex-cli' || values.provider === 'claude-code' ? (
+            <Text>Uses your {values.provider === 'codex-cli' ? 'Codex (ChatGPT)' : 'Claude Code'} subscription login; run qlm auth login {values.provider === 'codex-cli' ? 'codex' : 'claude'}. Embeddings still need an OpenAI key.</Text>
+          ) : null}
           <Text>Disable generation caching when working with sensitive source documents.</Text>
           <Text>Press s to validate and save; Left/Right changes provider, logging level, or cache setting.</Text>
         </>

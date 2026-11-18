@@ -1,13 +1,23 @@
 import { ConfigurationError } from '../config/error.js';
 import type { Settings } from '../config/schema.js';
+import { ClaudeCodeProvider, CodexCliProvider } from './cli-provider.js';
 import { OpenAICompatibleProvider } from './openai-compatible-provider.js';
 import type { AIProvider, EmbeddingProvider } from './provider.js';
 
 export function createConfiguredBuildProvider(settings: Settings): AIProvider {
+  const providerName = settings.ai?.provider ?? 'openai';
+  if (providerName === 'codex-cli') return new CodexCliProvider();
+  if (providerName === 'claude-code') return new ClaudeCodeProvider();
   return createConfiguredProvider(settings);
 }
 
 export function createConfiguredEmbeddingProvider(settings: Settings): EmbeddingProvider {
+  const providerName = settings.ai?.provider ?? 'openai';
+  if (providerName === 'codex-cli' || providerName === 'claude-code') {
+    throw new ConfigurationError(`${providerName} does not provide embeddings.`, {
+      suggestedAction: 'Use ai.provider openai with OPENAI_API_KEY for semantic search, or use lexical modes.',
+    });
+  }
   return createConfiguredProvider(settings);
 }
 
