@@ -32,7 +32,9 @@ import {
   type DocumentTreeNode,
   type KnowledgeTree,
 } from '../markdown/tree.js';
-import { initializeProject, listProjects } from './manager.js';
+import { deleteProject, initializeProject, listProjects } from './manager.js';
+import { exportProject, importProject, inspectProjectBundle } from './transfer.js';
+import { readStoredMarkdownDocument } from '../markdown/repository.js';
 import { validateProjectName } from './schema.js';
 import {
   buildProjectKnowledge,
@@ -186,20 +188,110 @@ export function registerProjectCommands(
       });
     });
 
-  cli
-    .command('project')
-    .description('Manage projects')
+  const projectCommand = cli.command('project').description('Manage projects');
+
+  projectCommand
     .command('list')
     .description('List initialized projects')
-    .action(async () => {
+    .option('--json', 'Print projects as JSON')
+    .action(async ({ json }: { json?: boolean }) => {
       await withProjectRuntime(runtimeFactory, async ({ dataRoot }) => {
         const projects = listProjects(dataRoot);
+        if (json) {
+          writeOut(`${JSON.stringify(projects, null, 2)}\n`);
+          return;
+        }
         if (projects.length === 0) {
           writeOut('No projects found.\n');
           return;
         }
 
         writeOut(`Projects:\n${projects.map(({ name }) => `- ${name}`).join('\n')}\n`);
+      });
+    });
+
+  projectCommand
+    .command('info <name>')
+    .description('Show project details')
+    .action(async (name: string) => {
+      await withProjectRuntime(runtimeFactory, async ({ dataRoot }) => {
+        const projectName = validateProjectName(name);
+        const project = listProjects(dataRoot).find((candidate) => candidate.name === projectName);
+        if (project === undefined) {
+          throw new InputError(`Project not found: ${projectName}`, {
+            suggestedAction: 'Run qlm project list to see initialized projects.',
+          });
+        }
+        const snapshots = listProjectSnapshots(dataRoot, project.id).length;
+        writeOut(
+          [
+            `Name: ${project.name}`,
+            `ID: ${project.id}`,
+            `Created: ${project.created_at}`,
+            `Updated: ${project.updated_at}`,
+            `Archived: ${project.archived_at ?? 'no'}`,
+            `Snapshots: ${snapshots}`,
+          ].join('\n') + '\n',
+        );
+      });
+    });
+
+  projectCommand
+    .command('remove <name>')
+    .description('Delete a project after taking a snapshot')
+    .option('--yes', 'confirm permanent project deletion')
+    .action(async (name: string, { yes }: { yes?: boolean }) => {
+      await withProjectRuntime(runtimeFactory, async ({ dataRoot }) => {
+        const projectName = validateProjectName(name);
+        if (!yes) {
+          throw new InputError('Project deletion was not confirmed.', {
+            suggestedAction: `Run qlm project remove ${projectName} --yes to delete it.`,
+          });
+        }
+        deleteProject(dataRoot, projectName, projectName);
+        writeOut(`Deleted project ${projectName}.\n`);
+      });
+    });
+
+  projectCommand
+    .command('export <name> <destination>')
+    .description('Export a project to a new directory')
+    .action(async (name: string, destination: string) => {
+      await withProjectRuntime(runtimeFactory, async ({ dataRoot }) => {
+        const exported = await exportProject(dataRoot, validateProjectName(name), destination);
+        writeOut(`Exported project ${name} to ${exported}.\n`);
+      });
+    });
+
+  projectCommand
+    .command('import <source>')
+    .description('Import a project from an exported directory')
+    .option('--name <name>', 'Name for the imported project (default: original name)')
+    .action(async (source: string, { name }: { name?: string }) => {
+      await withProjectRuntime(runtimeFactory, async ({ dataRoot }) => {
+        const targetName = name ?? (await inspectProjectBundle(source)).name;
+        const project = await importProject(dataRoot, source, targetName);
+        writeOut(`Imported project ${project.name}.\n`);
+      });
+    });
+
+  cli
+    .command('read <path>')
+    .description('Print a knowledge document body')
+    .requiredOption('--project <name>', 'Project containing the document')
+    .action(async (path: string, { project }: { project: string }) => {
+      await withProjectRuntime(runtimeFactory, async ({ dataRoot }) => {
+        const projectName = validateProjectName(project);
+        if (!listProjects(dataRoot).some(({ name }) => name === projectName)) {
+          throw new InputError(`Project not found: ${projectName}`, {
+            suggestedAction: 'Run qlm project list to see initialized projects.',
+          });
+        }
+        const document = readStoredMarkdownDocument(
+          join(dataRoot, 'projects', projectName, 'knowledge'),
+          path,
+        );
+        writeOut(document.body.endsWith('\n') ? document.body : `${document.body}\n`);
       });
     });
 

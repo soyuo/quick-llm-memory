@@ -290,10 +290,11 @@ export function TuiApp({
         if (key.backspace || key.delete) {
           setProjectAction({ ...projectAction, value: projectAction.value.slice(0, -1) });
         } else if (key.return) {
-          void inspectProjectBundle(projectAction.value).then((metadata) => {
+          const sourcePath = cleanPathInput(projectAction.value);
+          void inspectProjectBundle(sourcePath).then((metadata) => {
             setProjectAction({
               kind: 'import-name',
-              sourcePath: projectAction.value,
+              sourcePath,
               value: metadata.name,
             });
             setProjectMessage(undefined);
@@ -328,7 +329,7 @@ export function TuiApp({
           setProjectAction({
             kind: 'confirm-export',
             projectName: projectAction.projectName,
-            destinationPath: projectAction.value,
+            destinationPath: cleanPathInput(projectAction.value),
           });
         } else if (isTextInput(input, key)) {
           setProjectAction({ ...projectAction, value: projectAction.value + input });
@@ -431,7 +432,7 @@ export function TuiApp({
       }
       if (input.toLowerCase() === 'n') {
         setProjectMessage(undefined);
-        setProjectAction({ kind: 'rename', projectName: project.name, value: '' });
+        setProjectAction({ kind: 'rename', projectName: project.name, value: project.name });
       } else if (input.toLowerCase() === 'a') {
         setProjectMessage(undefined);
         setProjectAction({
@@ -498,7 +499,7 @@ export function TuiApp({
           <Text>Projects: {dashboard.projects.length}</Text>
           {dashboard.error ? <Text>{dashboard.error}</Text> : null}
           {currentProjectName === undefined ? (
-            <Text>No projects yet. Use qlm init &lt;name&gt; to create one.</Text>
+            <Text>No projects yet. Press c to create one, or i to import a bundle.</Text>
           ) : (
             <>
               <Text>Selected project: {currentProjectName}</Text>
@@ -523,7 +524,7 @@ export function TuiApp({
         <>
           <Text>Projects: {dashboard.projects.length}</Text>
           {dashboard.projects.length === 0 ? (
-            <Text>No projects yet. Use qlm init &lt;name&gt; to create one.</Text>
+            <Text>No projects yet. Press c to create one, or i to import a bundle.</Text>
           ) : dashboard.projects.map((project, index) => (
             <Text key={project.id}>
               {index === projectSelectionIndex ? '› ' : '  '}
@@ -652,7 +653,6 @@ export function TuiApp({
       ) : (
         <Text>{activeScreen} screen is not available yet.</Text>
       )}
-      {activeScreen ? <Text>Press Esc to return to navigation.</Text> : null}
     </Box>
   );
 
@@ -670,7 +670,9 @@ export function TuiApp({
         </Box>
       )}
       <Text dimColor>
-        ↑/↓ Navigate  Enter Select  Tab Switch pane  Esc Back  r Refresh  q Quit
+        {activeScreen
+          ? 'Esc Back to navigation  q Quit'
+          : '↑/↓ Navigate  Enter Select  Tab Switch pane  Esc Back  r Refresh  q Quit'}
       </Text>
     </Box>
   );
@@ -706,4 +708,13 @@ export async function launchTui(dataRoot = resolveSettingsPaths().dataRoot): Pro
   }
 
   await render(<TuiApp dataRoot={dataRoot} />).waitUntilExit();
+}
+
+function cleanPathInput(value: string): string {
+  const trimmed = value.trim();
+  const first = trimmed[0];
+  if (trimmed.length >= 2 && (first === '"' || first === "'") && trimmed.endsWith(first)) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
 }

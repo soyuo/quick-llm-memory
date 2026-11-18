@@ -35,6 +35,11 @@ describe('TUI project lifecycle actions', () => {
     writeFileSync(join(knowledgeDirectory, 'notes.md'), 'keep this document');
     app.stdin.write('n');
     await flushInkEffects();
+    expect(app.lastFrame()).toContain('new-project');
+    for (let index = 0; index < 'new-project'.length; index += 1) {
+      app.stdin.write('');
+      await flushInkEffects();
+    }
     app.stdin.write('renamed-project');
     await flushInkEffects();
     app.stdin.write('\r');
