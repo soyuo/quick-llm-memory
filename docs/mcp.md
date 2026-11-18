@@ -95,3 +95,13 @@ editors from changing the same file during the final approval operation; portabl
 filesystem rename APIs do not provide a content-hash compare-and-swap primitive.
 To discard a pending proposal without applying it, run
 `qlm mcp cancel <proposal-id>`.
+
+## Project snapshots
+
+Create and list immutable, checksummed snapshots with `qlm snapshot create <project>`
+and `qlm snapshot list <project>`. Snapshots include project files such as Markdown,
+settings, source metadata, relations, and generation history; rebuildable SQLite
+indexes are omitted. Each snapshot is published only after its files and versioned
+manifest have been written successfully. Symlinks and changed-during-copy files are
+rejected. Keep only snapshots needed for recovery and remove old snapshot directories
+manually when retention is no longer required. Restore is not yet supported.

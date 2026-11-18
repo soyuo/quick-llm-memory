@@ -5,6 +5,7 @@ import { loadSettings } from '../config/settings.js';
 import { resolveSettingsPaths } from '../config/paths.js';
 import { InputError } from '../errors/qlm-error.js';
 import type { Settings } from '../config/schema.js';
+import { createProjectSnapshot, listProjectSnapshots } from './snapshots.js';
 import { rebuildProjectIndex, rebuildProjectIndexWithEmbeddings } from '../database/reindex.js';
 import {
   createApplicationLogger,
@@ -55,6 +56,24 @@ export function registerProjectCommands(
   const runtimeFactory = options.runtimeFactory ?? createProjectRuntime;
   const providerFactory = options.providerFactory ?? createConfiguredBuildProvider;
   const writeOut = options.writeOut ?? ((text) => process.stdout.write(text));
+
+  const snapshot = cli.command('snapshot').description('Create and list project snapshots');
+  snapshot.command('create <project>').description('Create a verified project snapshot').action(async (projectName: string) => {
+    await withProjectRuntime(runtimeFactory, async ({ dataRoot }) => {
+      const project = listProjects(dataRoot).find(({ name }) => name === validateProjectName(projectName));
+      if (!project) throw new InputError(`Project not found: ${projectName}`);
+      const result = createProjectSnapshot(dataRoot, project.id, project.name);
+      writeOut(`Created snapshot ${result.id} for ${project.name} (${result.files.length} files).\n`);
+    });
+  });
+  snapshot.command('list <project>').description('List and verify project snapshots').action(async (projectName: string) => {
+    await withProjectRuntime(runtimeFactory, async ({ dataRoot }) => {
+      const project = listProjects(dataRoot).find(({ name }) => name === validateProjectName(projectName));
+      if (!project) throw new InputError(`Project not found: ${projectName}`);
+      const results = listProjectSnapshots(dataRoot, project.id);
+      writeOut(results.length ? results.map(({ id, createdAt, files }) => `${id} ${createdAt} ${files.length} files`).join('\n') + '\n' : `No snapshots for ${project.name}.\n`);
+    });
+  });
 
   cli
     .command('build <source>')
