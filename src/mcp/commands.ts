@@ -1,4 +1,5 @@
 import { Command, Option } from 'commander';
+import { createInterface } from 'node:readline/promises';
 import type { StdioServerHandle } from '@modelcontextprotocol/server/stdio';
 import { InputError } from '../errors/qlm-error.js';
 import {
@@ -11,6 +12,11 @@ import {
 import { serveMcpStdio } from './server.js';
 import { serveMcpHttp, type McpHttpServerHandle } from './http-server.js';
 import type { ServeMcpHttpOptions } from './http-server.js';
+import { resolveSettingsPaths } from '../config/paths.js';
+import { loadSettings } from '../config/settings.js';
+import { approveStoredDocumentProposal, cancelStoredDocumentProposal, readStoredDocumentProposal } from './proposal-store.js';
+import { resolveMcpProjectScope } from './access.js';
+import { readStoredMarkdownDocument } from '../markdown/repository.js';
 
 export interface McpCommandOptions {
   serveStdio?: () => StdioServerHandle | Promise<StdioServerHandle>;
@@ -129,6 +135,69 @@ export function registerMcpCommands(
           `${formatMcpClientConfig(generated)}\n`,
       );
     });
+
+  mcp
+    .command('approve <proposalId>')
+    .description('Review and locally approve a pending MCP document proposal')
+    .action(async (proposalId: string) => {
+      const paths = resolveSettingsPaths();
+      const settings = loadSettings({ paths });
+      const proposal = readStoredDocumentProposal(paths.dataRoot, proposalId);
+      const scope = resolveMcpProjectScope(paths.dataRoot, proposal.projectName);
+      const current = readStoredMarkdownDocument(scope.knowledgeRoot, proposal.documentPath);
+      const writeOut = options.writeOut ?? ((text: string) => process.stdout.write(text));
+      const review = formatProposalReview(proposal, current);
+      writeOut(review);
+      assertProposalReviewComplete(review);
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        throw new InputError('Proposal approval requires an interactive local terminal.');
+      }
+      const prompt = createInterface({ input: process.stdin, output: process.stdout });
+      let answer: string;
+      try {
+        answer = await prompt.question('Apply this proposal? Type yes to approve: ');
+      } finally {
+        prompt.close();
+      }
+      if (answer !== 'yes') {
+        writeOut('Proposal cancelled; no document changes were made.\n');
+        return;
+      }
+      approveStoredDocumentProposal({
+        dataRoot: paths.dataRoot,
+        proposalId,
+        permissions: new Set(settings.mcp.permissions),
+        confirmed: true,
+      });
+      writeOut('Proposal applied and project index refreshed.\n');
+    });
+
+  mcp
+    .command('cancel <proposalId>')
+    .description('Cancel a pending local MCP document proposal')
+    .action((proposalId: string) => {
+      const paths = resolveSettingsPaths();
+      cancelStoredDocumentProposal(paths.dataRoot, proposalId);
+      const writeOut = options.writeOut ?? ((text: string) => process.stdout.write(text));
+      writeOut('Proposal cancelled. No document changes were made.\n');
+    });
+}
+
+export function formatProposalReview(
+  proposal: ReturnType<typeof readStoredDocumentProposal>,
+  current: ReturnType<typeof readStoredMarkdownDocument>,
+): string {
+  const maxCharacters = 8_000;
+  const review = `Proposal ${proposal.id}\nProject: ${proposal.projectName}\nDocument: ${proposal.documentPath}\nSource hash: ${proposal.sourceHash}\n` +
+    `--- current metadata\n${JSON.stringify(current.metadata, null, 2)}\n+++ proposed metadata\n${JSON.stringify(proposal.draft.metadata, null, 2)}\n` +
+    `--- current body\n${current.body}\n+++ proposed body\n${proposal.draft.body}\n`;
+  return review.length <= maxCharacters ? review : `${review.slice(0, maxCharacters)}\n[review truncated]\n`;
+}
+
+export function assertProposalReviewComplete(review: string): void {
+  if (review.includes('[review truncated]')) {
+    throw new InputError('This proposal is too large to review completely; create a smaller proposal before approving it.');
+  }
 }
 
 function isMcpClient(value: string): value is McpClient {

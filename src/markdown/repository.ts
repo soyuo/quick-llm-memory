@@ -9,6 +9,7 @@ import {
   unlinkSync,
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import {
   dirname,
   extname,
@@ -129,6 +130,7 @@ export function saveMarkdownDocument(
   knowledgeRoot: string,
   relativePath: string,
   draft: MarkdownDocumentDraft,
+  expectedSourceHash?: string,
 ) {
   const root = ensureKnowledgeRoot(knowledgeRoot, true);
   const filePath = resolveDocumentPath(root, relativePath);
@@ -161,7 +163,7 @@ export function saveMarkdownDocument(
   const parsed = parseMarkdownDocument(markdown, filePath);
 
   try {
-    writeFileAtomicallyReplacing(filePath, markdown);
+    writeFileAtomicallyReplacing(filePath, markdown, expectedSourceHash);
   } catch (cause) {
     throw new InternalError(`Unable to save Markdown document: ${filePath}`, {
       cause,
@@ -172,6 +174,35 @@ export function saveMarkdownDocument(
   }
 
   return parsed;
+}
+
+/** Save an existing Markdown document only when its complete source still matches the reviewed snapshot. */
+export function saveMarkdownDocumentIfUnchanged(
+  knowledgeRoot: string,
+  relativePath: string,
+  draft: MarkdownDocumentDraft,
+  expectedSourceHash: string,
+) {
+  const current = readStoredMarkdownSource(knowledgeRoot, relativePath);
+  const currentHash = createHash('sha256').update(current.sourceText, 'utf8').digest('hex');
+  if (currentHash !== expectedSourceHash) {
+    throw new InputError('The document changed after this proposal was created; create a new proposal.');
+  }
+  return saveMarkdownDocument(knowledgeRoot, relativePath, draft, expectedSourceHash);
+}
+
+/** Restore a previously parsed source snapshot after a later approval step fails. */
+export function restoreStoredMarkdownSource(
+  knowledgeRoot: string,
+  relativePath: string,
+  sourceText: string,
+  expectedCurrentHash: string,
+): void {
+  const root = ensureKnowledgeRoot(knowledgeRoot, false);
+  const filePath = resolveDocumentPath(root, relativePath);
+  assertNoSymlinkComponents(root, filePath);
+  parseMarkdownDocument(sourceText, filePath);
+  writeFileAtomicallyReplacing(filePath, sourceText, expectedCurrentHash);
 }
 
 export function moveMarkdownDocument(
