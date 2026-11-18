@@ -24,3 +24,10 @@ included source. The standalone packaging workflow instead copies the helper
 already built by `npm ci`. A release is ready only when all test-matrix,
 packaging, and commit-validation checks pass. CI standalone artifacts expire
 after 14 days and are verification outputs, not releases.
+
+The first published release is `v0.1.0`, matching `package.json`. The Release
+workflow accepts only an existing matching version tag, runs the same gates,
+then assembles a curated npm tarball and three OS-specific standalone archives.
+Dispatch it with `draft: true`, download and verify every artifact using
+`SHA256SUMS`, run the documented CLI smoke checks, and publish the validated
+draft from GitHub. Use the same draft-first process for later versions.
