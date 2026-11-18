@@ -9,6 +9,10 @@ import {
   registerMcpCommands,
   type McpCommandOptions,
 } from './mcp/commands.js';
+import {
+  registerAuthCommands,
+  type AuthCommandOptions,
+} from './providers/auth-commands.js';
 import { launchTui } from './tui/app.js';
 
 export interface TuiCommandOptions {
@@ -18,6 +22,7 @@ export interface TuiCommandOptions {
 export type CliOptions =
   & ProjectCommandOptions
   & McpCommandOptions
+  & AuthCommandOptions
   & TuiCommandOptions;
 
 export function createCli(options: CliOptions = {}): Command {
@@ -28,6 +33,7 @@ export function createCli(options: CliOptions = {}): Command {
 
   registerProjectCommands(cli, options);
   registerMcpCommands(cli, options);
+  registerAuthCommands(cli, options);
   const runTui = options.runTui ?? launchTui;
   cli.action(async () => runTui());
   return cli;

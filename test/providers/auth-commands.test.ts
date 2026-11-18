@@ -1,0 +1,56 @@
+import { describe, expect, it, vi } from 'vitest';
+import { runCli } from '../../src/cli.js';
+import type { CliRunner } from '../../src/providers/cli-runner.js';
+
+async function run(authRunner: CliRunner, ...args: string[]) {
+  const out: string[] = [];
+  const err: string[] = [];
+  const exitCode = await runCli(
+    ['node', 'qlm', 'auth', ...args],
+    { writeOut: (text) => out.push(text), writeError: (text) => err.push(text) },
+    { authRunner },
+  );
+  return { exitCode, out: out.join(''), err: err.join('') };
+}
+
+describe('qlm auth', () => {
+  it('delegates browser login to the codex and claude CLIs', async () => {
+    const runner = vi.fn<CliRunner>(async () => ({ stdout: '', stderr: '', exitCode: 0 }));
+
+    expect((await run(runner, 'login', 'codex')).exitCode).toBe(0);
+    expect(runner).toHaveBeenLastCalledWith('codex', ['login'], { inherit: true });
+    expect((await run(runner, 'login', 'codex', '--device')).exitCode).toBe(0);
+    expect(runner).toHaveBeenLastCalledWith('codex', ['login', '--device-auth'], { inherit: true });
+    expect((await run(runner, 'login', 'claude')).exitCode).toBe(0);
+    expect(runner).toHaveBeenLastCalledWith('claude', ['auth', 'login'], { inherit: true });
+  });
+
+  it('rejects unknown providers and unsupported --device', async () => {
+    const runner = vi.fn<CliRunner>();
+
+    expect((await run(runner, 'login', 'gemini')).exitCode).toBe(1);
+    expect((await run(runner, 'login', 'claude', '--device')).exitCode).toBe(1);
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it('reports status for each CLI, including a missing CLI', async () => {
+    const runner: CliRunner = async (command) => {
+      if (command === 'claude') throw new Error('ENOENT');
+      return { stdout: 'Logged in using ChatGPT\n', stderr: '', exitCode: 0 };
+    };
+
+    const result = await run(runner, 'status');
+
+    expect(result.out).toContain('codex: Logged in using ChatGPT');
+    expect(result.out).toContain('claude: claude CLI not found on PATH');
+  });
+
+  it('fails when the vendor login does not complete', async () => {
+    const runner: CliRunner = async () => ({ stdout: '', stderr: '', exitCode: 1 });
+
+    const result = await run(runner, 'login', 'codex');
+
+    expect(result.exitCode).toBe(1);
+    expect(result.err).toContain('did not complete');
+  });
+});
