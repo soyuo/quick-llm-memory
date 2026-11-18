@@ -653,7 +653,6 @@ export function TuiApp({
       ) : (
         <Text>{activeScreen} screen is not available yet.</Text>
       )}
-      {activeScreen ? <Text>Press Esc to return to navigation.</Text> : null}
     </Box>
   );
 
@@ -671,7 +670,9 @@ export function TuiApp({
         </Box>
       )}
       <Text dimColor>
-        ↑/↓ Navigate  Enter Select  Tab Switch pane  Esc Back  r Refresh  q Quit
+        {activeScreen
+          ? 'Esc Back to navigation  q Quit'
+          : '↑/↓ Navigate  Enter Select  Tab Switch pane  Esc Back  r Refresh  q Quit'}
       </Text>
     </Box>
   );
