@@ -712,6 +712,9 @@ export async function launchTui(dataRoot = resolveSettingsPaths().dataRoot): Pro
 
 function cleanPathInput(value: string): string {
   const trimmed = value.trim();
-  const quoted = /^(["'])(.*)$/.exec(trimmed);
-  return quoted ? quoted[2]!.trim() : trimmed;
+  const first = trimmed[0];
+  if (trimmed.length >= 2 && (first === '"' || first === "'") && trimmed.endsWith(first)) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
 }
