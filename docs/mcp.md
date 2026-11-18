@@ -114,3 +114,5 @@ changed. Snapshots are retained until an operator removes them manually; the app
 does not automatically delete the last known-good snapshot.
 
 Markdown document moves also require a verified pre-move snapshot. No migration operation currently exists; rebuildable SQLite indexes remain excluded. Old snapshots are retained until manual cleanup.
+
+Restore a snapshot with qlm snapshot restore <project> <snapshot-id>. The command previews affected paths and requires typing `yes` (or `--yes`) before changes. It verifies the complete manifest and checksums before staging, creates a verified pre-restore snapshot, then swaps staged project files into place and rebuilds the index. If installation or index rebuilding fails, it restores the prior project directory; the prior database is rebuildable from Markdown and is not stored in snapshots. Corrupt or mismatched snapshots are rejected before project files are changed. A journal in the projects directory recovers an interrupted directory swap on the next restore attempt; invalid journals stop for manual inspection.
