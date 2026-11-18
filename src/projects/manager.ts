@@ -225,7 +225,7 @@ export function renameProject(
   const renamedProject = projectMetadataSchema.parse({
     ...project,
     name: targetName,
-    updated_at: new Date().toISOString(),
+    updated_at: new Date(Math.max(Date.now(), Date.parse(project.updated_at) + 1)).toISOString(),
   });
   try {
     writeProjectMetadata(targetDirectory, renamedProject);
