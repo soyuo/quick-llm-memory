@@ -41,6 +41,12 @@ function collect(root: string, dir = root): SnapshotFile[] {
   return files.sort((a, b) => a.path.localeCompare(b.path));
 }
 
+export function assertSnapshotInventoryUnchanged(before: readonly SnapshotFile[], after: readonly SnapshotFile[]): void {
+  if (JSON.stringify(before) !== JSON.stringify(after)) {
+    throw new InputError('Project changed while its snapshot was being created.');
+  }
+}
+
 export function createProjectSnapshot(dataRoot: string, projectId: string, projectName: string, context: { operation?: string; reason?: string } = {}): SnapshotManifest {
   assertProjectId(projectId);
   validateProjectName(projectName);
@@ -67,6 +73,14 @@ export function createProjectSnapshot(dataRoot: string, projectId: string, proje
       const bytes = readFileSync(source);
       if (hash(bytes) !== file.sha256) throw new InputError('Snapshot source changed during copy.');
       writeFileSync(target, bytes, { flag: 'wx' });
+    }
+    const verifiedFiles = collect(project);
+    assertSnapshotInventoryUnchanged(files, verifiedFiles);
+    for (const file of files) {
+      const copied = readFileSync(join(stage, ...file.path.split('/')));
+      if (copied.length !== file.size || hash(copied) !== file.sha256) {
+        throw new InputError('Snapshot copy verification failed.');
+      }
     }
     const manifest: SnapshotManifest = { version: 1, id, projectId, projectName, createdAt: new Date().toISOString(), ...context, files };
     writeFileSync(join(stage, 'manifest.json'), JSON.stringify(manifest, null, 2), { flag: 'wx' });

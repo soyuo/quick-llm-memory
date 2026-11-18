@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createProjectSnapshot, listProjectSnapshots } from '../src/projects/snapshots.js';
+import { assertSnapshotInventoryUnchanged, createProjectSnapshot, listProjectSnapshots } from '../src/projects/snapshots.js';
 import { initializeProject } from '../src/projects/manager.js';
 
 const roots: string[] = [];
@@ -20,6 +20,16 @@ function setup() {
 }
 
 describe('project snapshots', () => {
+  it('rejects an inventory that changes while files are copied', () => {
+    const before = [{ path: 'knowledge/note.md', size: 2, sha256: 'a'.repeat(64) }];
+    const modified = [{ ...before[0]!, size: 3, sha256: 'b'.repeat(64) }];
+    const added = [...before, { path: 'knowledge/new.md', size: 1, sha256: 'c'.repeat(64) }];
+
+    expect(() => assertSnapshotInventoryUnchanged(before, modified)).toThrow('Project changed while its snapshot');
+    expect(() => assertSnapshotInventoryUnchanged(before, added)).toThrow('Project changed while its snapshot');
+    expect(() => assertSnapshotInventoryUnchanged(before, before)).not.toThrow();
+  });
+
   it('publishes immutable checksummed copies and omits rebuildable databases', () => {
     const { root, dir, project } = setup();
     const source = readFileSync(join(dir, 'knowledge', 'note.md'));
