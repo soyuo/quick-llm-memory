@@ -24,7 +24,10 @@ export function SettingsScreen({ paths, onBack, onExit }: SettingsScreenProps): 
   const [editingModel, setEditingModel] = useState<'model' | 'embeddingModel'>();
   const [modelDraft, setModelDraft] = useState(loaded.values?.model ?? '');
   const [message, setMessage] = useState(loaded.error);
+  const [savedSnapshot, setSavedSnapshot] = useState(() => JSON.stringify(loaded.values));
+  const [discardArmed, setDiscardArmed] = useState(false);
   const values = loaded.values;
+  const dirty = values !== undefined && JSON.stringify(values) !== savedSnapshot;
 
   useInput((input, key) => {
     if ((input.toLowerCase() === 'q' && !editingModel) || (key.ctrl && input.toLowerCase() === 'c')) {
@@ -36,10 +39,16 @@ export function SettingsScreen({ paths, onBack, onExit }: SettingsScreenProps): 
       if (editingModel) {
         setEditingModel(undefined);
         setModelDraft(values?.[editingModel] ?? '');
+      } else if (dirty && !discardArmed) {
+        setDiscardArmed(true);
+        setMessage('Unsaved changes. Press s to save, or Esc again to discard them.');
       } else {
         onBack?.();
       }
       return;
+    }
+    if (discardArmed) {
+      setDiscardArmed(false);
     }
     if (values === undefined) {
       return;
@@ -93,6 +102,7 @@ export function SettingsScreen({ paths, onBack, onExit }: SettingsScreenProps): 
         const nextValues = toEditableSettings(saved);
         setLoaded({ values: nextValues });
         setModelDraft(nextValues.model);
+        setSavedSnapshot(JSON.stringify(nextValues));
         setMessage('Settings saved to config.yaml.');
       } catch (error) {
         setMessage(error instanceof ConfigurationError
@@ -104,7 +114,7 @@ export function SettingsScreen({ paths, onBack, onExit }: SettingsScreenProps): 
 
   return (
     <Box flexDirection="column">
-      <Text bold>Settings</Text>
+      <Text bold>Settings{dirty ? ' (unsaved changes)' : ''}</Text>
       <Text>Only settings supported by the application are editable. Provider credentials stay in environment variables.</Text>
       {values === undefined ? (
         <Text>{loaded.error ?? 'Settings could not be loaded.'}</Text>
@@ -114,13 +124,13 @@ export function SettingsScreen({ paths, onBack, onExit }: SettingsScreenProps): 
           <Text>{fieldIndex === 1 ? '›' : ' '} AI Model: {sanitizeTerminalText(editingModel === 'model' ? `${modelDraft}▏` : (values.model || '(not set)'))}</Text>
           <Text>{fieldIndex === 2 ? '›' : ' '} Embedding model: {sanitizeTerminalText(editingModel === 'embeddingModel' ? `${modelDraft}▏` : values.embeddingModel)}</Text>
           <Text>{fieldIndex === 3 ? '›' : ' '} Logging level: {sanitizeTerminalText(values.loggingLevel)}</Text>
-          <Text>{fieldIndex === 4 ? '> ' : '  '}Generation response cache: {values.cacheGeneration ? 'Enabled' : 'Disabled'}</Text>
+          <Text>{fieldIndex === 4 ? '›' : ' '} Generation response cache: {values.cacheGeneration ? 'Enabled' : 'Disabled'}</Text>
           <Text>Disable generation caching when working with sensitive source documents.</Text>
           <Text>Press s to validate and save; Left/Right changes provider, logging level, or cache setting.</Text>
         </>
       )}
       {message ? <Text>{sanitizeTerminalText(message)}</Text> : null}
-      <Text>Up/Down selects a setting, Enter edits a model, Esc returns, q quits.</Text>
+      <Text>Up/Down selects a setting, Enter edits a model, s saves, Esc returns, q quits.</Text>
     </Box>
   );
 }

@@ -19,6 +19,22 @@ afterEach(() => {
 });
 
 describe('TUI Settings', () => {
+  it('warns about unsaved changes before discarding them', async () => {
+    const paths = createPaths();
+    mkdirSync(paths.configDir, { recursive: true });
+    writeFileSync(paths.configFile, 'ai:\n  provider: openai\nlogging:\n  level: info\n');
+    const app = render(<TuiApp dataRoot={paths.dataRoot} settingsPaths={paths} />);
+    apps.push(app);
+
+    await openSettings(app);
+    app.stdin.write('[C');
+    await flushInkEffects();
+    expect(app.lastFrame()).toContain('Settings (unsaved changes)');
+    app.stdin.write('');
+    await waitForFrame(app, 'Unsaved changes. Press s to save');
+    expect(app.lastFrame()).toContain('Settings (unsaved changes)');
+  });
+
   it('edits supported values, persists them, and reloads them on a new screen', async () => {
     const paths = createPaths();
     mkdirSync(paths.configDir, { recursive: true });
