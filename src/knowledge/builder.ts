@@ -527,7 +527,9 @@ export async function executePreparedKnowledgeBuild(
     }
 
     emit({ stage: 'committing' });
-    if (committedCandidates.length > 0) {
+    // Full replacement can remove existing generated files even when it has no
+    // candidates, so it always needs a recovery point before commit.
+    if (committedCandidates.length > 0 || !incremental) {
       const dataRoot = resolve(options.projectRoot, '..', '..');
       createProjectSnapshot(dataRoot, options.project.id, options.project.name, {
         operation: 'knowledge-build',
