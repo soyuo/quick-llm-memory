@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
@@ -17,6 +18,8 @@ const environment = Object.fromEntries(
 );
 environment.QLM_HOME = dataRoot;
 environment.APPDATA = join(temporaryRoot, 'appdata');
+const networkGuard = pathToFileURL(join(repositoryRoot, 'scripts', 'verify-no-network.mjs')).href;
+environment.NODE_OPTIONS = [environment.NODE_OPTIONS, `--import=${networkGuard}`].filter(Boolean).join(' ');
 const runCli = (...args) => execFileSync(process.execPath, [cliPath, ...args], {
   cwd: repositoryRoot,
   env: environment,
@@ -161,6 +164,12 @@ try {
   );
   assert.deepEqual(readFileSync(documentPath), initialMarkdown);
   assert.deepEqual(readFileSync(databasePath), initialDatabase);
+  runCli('reindex', '--project', 'demo', '--no-embeddings');
+  const recoveredRead = await client.callTool({
+    name: 'memory_read', arguments: { project: 'demo', path: 'security/overview.md' },
+  });
+  assert.equal(recoveredRead.isError, undefined);
+  assert.match(JSON.stringify(recoveredRead.structuredContent ?? recoveredRead.content), /MCP verification/);
   await client.close();
   client = undefined;
   assert.equal(serverStderr, '', `Unexpected MCP server stderr: ${serverStderr}`);
