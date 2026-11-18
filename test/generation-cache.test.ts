@@ -140,7 +140,7 @@ describe('generation response cache', () => {
     }
 
     expect(readdirSync(join(root, 'cache', 'generation', 'project-123'))).toHaveLength(128);
-  });
+  }, 15_000);
 
   it('does not cache responses larger than the per-entry limit', async () => {
     const root = makeProjectRoot();

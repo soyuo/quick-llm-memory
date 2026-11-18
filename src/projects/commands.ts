@@ -248,7 +248,8 @@ export function registerProjectCommands(
     .command('reindex')
     .description('Rebuild the project SQLite index from Markdown')
     .requiredOption('--project <name>', 'Project to reindex')
-    .action(async ({ project }: { project: string }) => {
+    .option('--no-embeddings', 'Rebuild lexical index without contacting an embedding provider')
+    .action(async ({ project, embeddings }: { project: string; embeddings: boolean }) => {
       await withProjectRuntime(runtimeFactory, async ({ dataRoot, logger, settings: runtimeSettings }) => {
         const projectName = validateProjectName(project);
         const projectMetadata = listProjects(dataRoot).find(
@@ -262,8 +263,8 @@ export function registerProjectCommands(
 
         const projectRoot = join(dataRoot, 'projects', projectName);
         const settings = runtimeSettings ?? loadSettings();
-        const provider = providerFactory(settings);
-        const result = isEmbeddingProvider(provider)
+        const provider = embeddings ? providerFactory(settings) : undefined;
+        const result = provider !== undefined && isEmbeddingProvider(provider)
           ? await rebuildProjectIndexWithEmbeddings(projectRoot, projectMetadata, {
               provider,
               model: settings.ai?.embedding_model ?? 'text-embedding-3-small',
