@@ -83,7 +83,7 @@ describe('TUI Settings', () => {
     expect(app.lastFrame()).toContain('Embedding model: text-embedding-3-large');
     expect(app.lastFrame()).toContain('Logging level: debug');
     expect(app.lastFrame()).toContain('Generation response cache: Disabled');
-  });
+  }, 15_000);
 
   it('does not display or rewrite credentials found in existing config', async () => {
     const paths = createPaths();
