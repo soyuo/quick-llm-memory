@@ -11,7 +11,7 @@ export const settingsSchema = z
       .default({ level: 'info' }),
     ai: z
       .object({
-        provider: z.enum(['openai', 'openai-compatible']).default('openai'),
+        provider: z.enum(['openai', 'openai-compatible', 'codex-cli', 'claude-code']).default('openai'),
         model: z.string().trim().min(1).optional(),
         embedding_model: z.string().trim().min(1).default('text-embedding-3-small'),
         cache_generation: z.boolean().default(true),
