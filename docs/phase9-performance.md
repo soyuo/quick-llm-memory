@@ -10,13 +10,18 @@ The fixture and query are local and deterministic. Reindex explicitly disables e
 
 Captured 2026-11-18 on Windows 11 x64, Node v24.22.1, Intel Core Ultra 7 255H, 16 logical CPUs. Fixture: 250 documents, 5,604-byte body template per document, generated in one category. Build used the checked-in tsup configuration (`node24`).
 
-| Workflow | First invocation | Warm median (6 runs) |
-| --- | ---: | ---: |
-| CLI startup (`--version`) | 1,468 ms | 1,159 ms |
-| Index (`reindex --no-embeddings`) | 2,645 ms | 2,535 ms |
-| Full-text retrieval (top 10) | 1,352 ms | 1,192 ms |
+| Run | Workflow | First invocation | Warm median (6 runs) |
+| --- | --- | ---: | ---: |
+| Baseline | CLI startup (`--version`) | 1,468 ms | 1,159 ms |
+| Baseline | Index (`reindex --no-embeddings`) | 2,645 ms | 2,535 ms |
+| Baseline | Full-text retrieval (top 10) | 1,352 ms | 1,192 ms |
+| Final, no runtime changes | CLI startup (`--version`) | 3,322 ms | 1,073 ms |
+| Final, no runtime changes | Index (`reindex --no-embeddings`) | 4,171 ms | 2,594 ms |
+| Final, no runtime changes | Full-text retrieval (top 10) | 1,767 ms | 1,343 ms |
 
 All seven retrieval runs returned matching fixture documents. The CPU profile's leading sampled functions were `lstat` (456 ticks), `internalModuleStat` (210), `compileSourceTextModule` (164), and Markdown parser functions (`subtokenize` 66, `subcontent` 60, `chunkInside` 53). This identifies filesystem validation and module loading as areas to investigate, but does not isolate their wall-clock contribution. The measured end-to-end values also vary substantially between repetitions, consistent with process launch and host load contributing to these short workflows.
+
+The final run used the same script, fixture, machine, and runtime after adding the benchmark and documentation. Its CPU profile again showed the same leading areas (`lstat` 657 ticks, `internalModuleStat` 262, and `compileSourceTextModule` 159); the variation in timings and profile samples reinforces that this evidence does not justify changing runtime behavior in this issue.
 
 ## Optimization decision
 
