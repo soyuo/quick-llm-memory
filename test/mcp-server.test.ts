@@ -20,7 +20,7 @@ import { initializeProject } from '../src/projects/manager.js';
 
 describe('MCP server bootstrap', () => {
   it('enforces restricted permissions over stdio and HTTP transports', async () => {
-    const restrictedPermissions = new Set(['SEARCH'] as const);
+    const restrictedPermissions = new Set(['METADATA'] as const);
     const [stdioClientTransport, stdioServerTransport] = InMemoryTransport.createLinkedPair();
     const stdioHandle = serveMcpStdio({
       transport: stdioServerTransport,

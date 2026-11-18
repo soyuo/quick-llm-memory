@@ -126,7 +126,6 @@ export function registerMcpTools(
 }
 
 function listSafeProjects(dataRoot: string) {
-  assertMcpOperationAllowed('SEARCH');
   const projectsRoot = join(dataRoot, 'projects');
   try {
     const rootInfo = lstatSync(projectsRoot);
