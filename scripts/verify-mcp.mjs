@@ -13,9 +13,10 @@ const outsideFile = join(temporaryRoot, 'outside.md');
 const cliPath = join(repositoryRoot, 'dist', 'index.js');
 const environment = Object.fromEntries(
   Object.entries(process.env).filter(([key]) =>
-    /^(PATH|SYSTEMROOT|WINDIR|TEMP|TMP|COMSPEC|PATHEXT)$/i.test(key)),
+    /^(PATH|SYSTEMROOT|WINDIR|TEMP|TMP|COMSPEC|PATHEXT|APPDATA|LOCALAPPDATA)$/i.test(key)),
 );
 environment.QLM_HOME = dataRoot;
+environment.APPDATA = join(temporaryRoot, 'appdata');
 const runCli = (...args) => execFileSync(process.execPath, [cliPath, ...args], {
   cwd: repositoryRoot,
   env: environment,
@@ -29,6 +30,9 @@ let serverStderr = '';
 
 try {
   runCli('init', 'demo');
+  const settingsPath = join(environment.APPDATA, 'quick-llm-memory', 'config', 'config.yaml');
+  mkdirSync(dirname(settingsPath), { recursive: true });
+  writeFileSync(settingsPath, 'mcp:\n  permissions:\n    - READ\n    - SEARCH\n    - METADATA\n    - PROPOSE_WRITE\n', 'utf8');
 
   const projectRoot = join(dataRoot, 'projects', 'demo');
   const documentPath = join(projectRoot, 'knowledge', 'security', 'overview.md');
@@ -54,7 +58,7 @@ try {
     '',
   ].join('\n'), 'utf8');
   writeFileSync(outsideFile, '# Outside\n\nThis file must never be exposed.\n', 'utf8');
-  runCli('reindex', '--project', 'demo');
+  runCli('reindex', '--project', 'demo', '--no-embeddings');
 
   const databasePath = join(projectRoot, 'index', 'knowledge.db');
   const initialMarkdown = readFileSync(documentPath);
@@ -75,10 +79,12 @@ try {
   const toolNames = tools.map(({ name }) => name).sort();
   assert.deepEqual(toolNames, [
     'memory_get_context', 'memory_get_metadata', 'memory_get_related',
-    'memory_get_tree', 'memory_list_projects', 'memory_read', 'memory_read_many',
+    'memory_get_tree', 'memory_list_projects', 'memory_propose_document_update', 'memory_read', 'memory_read_many',
     'memory_search', 'memory_validate',
   ]);
-  assert.ok(tools.every((tool) => tool.annotations?.readOnlyHint === true));
+  assert.ok(tools.filter(({ name }) => name !== 'memory_propose_document_update')
+    .every((tool) => tool.annotations?.readOnlyHint === true));
+  assert.equal(tools.find(({ name }) => name === 'memory_propose_document_update')?.annotations?.readOnlyHint, false);
 
   const projectList = await client.callTool({ name: 'memory_list_projects', arguments: {} });
   assert.equal(projectList.isError, undefined);
@@ -99,6 +105,22 @@ try {
   });
   assert.equal(document.isError, undefined);
   assert.match(JSON.stringify(document.structuredContent ?? document.content), /MCP verification/);
+
+  const proposal = await client.callTool({
+    name: 'memory_propose_document_update',
+    arguments: {
+      project: 'demo', path: 'security/overview.md',
+      metadata: {
+        schema_version: 1, title: 'Reviewed proposal title', depth: 1,
+        type: 'document', status: 'draft', category: 'security',
+        tags: ['verification'], source_ids: [], source_sections: [], related: [],
+      },
+      body: '# MCP verification\n\nProposed but not applied.\n',
+    },
+  });
+  assert.equal(proposal.isError, undefined, JSON.stringify(proposal));
+  assert.match(JSON.stringify(proposal), /Reviewed proposal title/);
+  assert.deepEqual(readFileSync(documentPath), initialMarkdown);
 
   const { resources } = await client.listResources();
   assert.ok(resources.some(({ uri }) => uri === 'qlm://demo/security/overview.md'));
@@ -122,6 +144,21 @@ try {
     client.callTool({ name: 'memory_write', arguments: { project: 'demo', path: 'x.md', content: 'no' } }),
   );
 
+  assert.deepEqual(readFileSync(documentPath), initialMarkdown);
+  assert.deepEqual(readFileSync(databasePath), initialDatabase);
+  const snapshotOutput = runCli('snapshot', 'create', 'demo');
+  const snapshotId = snapshotOutput.match(/Created snapshot ([0-9a-f-]+)/)?.[1];
+  assert.ok(snapshotId, snapshotOutput);
+  const projectMetadata = readFileSync(join(projectRoot, 'project.yaml'), 'utf8');
+  const projectId = projectMetadata.match(/^id:\s*([0-9a-f-]+)/m)?.[1];
+  assert.ok(projectId, projectMetadata);
+  const snapshotFile = join(dataRoot, 'snapshots', projectId, snapshotId, 'knowledge', 'security', 'overview.md');
+  writeFileSync(snapshotFile, 'tampered snapshot');
+  assert.throws(() => runCli('snapshot', 'list', 'demo'), /Unable to verify project snapshots/);
+  assert.throws(
+    () => runCli('snapshot', 'restore', 'demo', snapshotId, '--yes'),
+    /Unable to verify project snapshots/,
+  );
   assert.deepEqual(readFileSync(documentPath), initialMarkdown);
   assert.deepEqual(readFileSync(databasePath), initialDatabase);
   await client.close();
