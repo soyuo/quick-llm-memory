@@ -31,7 +31,7 @@ export function registerMcpTools(
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },
     () => {
-      assertMcpOperationAllowed('read');
+      assertMcpOperationAllowed('READ');
       try {
         const projects = listSafeProjects(options.dataRoot);
         return structuredResult({ projects });
@@ -53,7 +53,7 @@ export function registerMcpTools(
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },
     ({ project, maxDepth, maxEntries }) => {
-      assertMcpOperationAllowed('read');
+      assertMcpOperationAllowed('READ');
       try {
         const scope = resolveMcpProjectScope(options.dataRoot, project);
         const tree = buildKnowledgeTree(scope.knowledgeRoot, {
@@ -86,7 +86,7 @@ export function registerMcpTools(
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },
     async ({ project, query, mode, maxResults, maxDepth }, context) => {
-      assertMcpOperationAllowed('read');
+      assertMcpOperationAllowed('SEARCH');
       try {
         const scope = resolveMcpProjectScope(options.dataRoot, project);
         let semantic: { provider: EmbeddingProvider; model: string } | undefined;
@@ -126,7 +126,7 @@ export function registerMcpTools(
 }
 
 function listSafeProjects(dataRoot: string) {
-  assertMcpOperationAllowed('read');
+  assertMcpOperationAllowed('SEARCH');
   const projectsRoot = join(dataRoot, 'projects');
   try {
     const rootInfo = lstatSync(projectsRoot);

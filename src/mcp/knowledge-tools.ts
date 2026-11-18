@@ -31,7 +31,7 @@ export function registerMcpKnowledgeTools(
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },
     ({ project, query, mode, max_tokens, max_results, max_depth, include_related, max_related_results }) => {
-      assertMcpOperationAllowed('read');
+      assertMcpOperationAllowed('SEARCH');
       try {
         if (max_depth !== undefined && mode !== 'hierarchical') {
           throw new InputError('max_depth applies only to hierarchical retrieval.');
@@ -71,7 +71,7 @@ export function registerMcpKnowledgeTools(
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },
     ({ project, path, max_results }) => {
-      assertMcpOperationAllowed('read');
+      assertMcpOperationAllowed('SEARCH');
       try {
         const scope = resolveMcpProjectScope(options.dataRoot, project);
         const results = searchProjectDocuments({
@@ -104,7 +104,7 @@ export function registerMcpKnowledgeTools(
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },
     ({ project }) => {
-      assertMcpOperationAllowed('read');
+      assertMcpOperationAllowed('METADATA');
       try {
         const scope = resolveMcpProjectScope(options.dataRoot, project);
         const result = validateInternalLinks(scope.knowledgeRoot);

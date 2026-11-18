@@ -1,4 +1,5 @@
 import { lstatSync, readFileSync } from 'node:fs';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { join, resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { InputError } from '../errors/qlm-error.js';
@@ -30,9 +31,35 @@ export interface McpReadableDocument {
  * Phase 5 MCP policy is read-only and default-deny. Future handlers must
  * request the sole allowed operation explicitly before accessing project data.
  */
-export function assertMcpOperationAllowed(operation: string): void {
-  if (operation !== 'read') {
-    throw new InputError('MCP operation is not allowed by the read-only policy.');
+export type McpPermission =
+  | 'READ'
+  | 'SEARCH'
+  | 'METADATA'
+  | 'PROPOSE_WRITE'
+  | 'APPROVED_WRITE'
+  | 'ADMIN';
+
+const DEFAULT_MCP_PERMISSIONS: ReadonlySet<McpPermission> = new Set([
+  'READ',
+  'SEARCH',
+  'METADATA',
+]);
+const configuredMcpPermissions = new AsyncLocalStorage<ReadonlySet<McpPermission>>();
+
+export function runWithMcpPermissions<T>(
+  permissions: ReadonlySet<McpPermission>,
+  callback: () => T,
+): T {
+  return configuredMcpPermissions.run(permissions, callback);
+}
+
+export function assertMcpOperationAllowed(
+  permission: McpPermission,
+  configuredPermissions: ReadonlySet<McpPermission> =
+    configuredMcpPermissions.getStore() ?? DEFAULT_MCP_PERMISSIONS,
+): void {
+  if (!configuredPermissions.has(permission) && !configuredPermissions.has('ADMIN')) {
+    throw new InputError(`MCP permission ${permission} is not enabled.`);
   }
 }
 
@@ -40,7 +67,7 @@ export function resolveMcpProjectScope(
   dataRoot: string,
   projectName: string,
 ): McpProjectScope {
-  assertMcpOperationAllowed('read');
+  assertMcpOperationAllowed('READ');
   const name = validateProjectName(projectName);
   const projectsRoot = resolve(dataRoot, PROJECTS_DIRECTORY);
   const projectRoot = join(projectsRoot, name);
@@ -110,7 +137,7 @@ export function readMcpProjectDocument(
   scope: McpProjectScope,
   relativePath: string,
 ): McpReadableDocument {
-  assertMcpOperationAllowed('read');
+  assertMcpOperationAllowed('READ');
 
   try {
     const document = readStoredMarkdownDocument(scope.knowledgeRoot, relativePath);

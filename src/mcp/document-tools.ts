@@ -29,7 +29,7 @@ export function registerMcpDocumentTools(
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },
     ({ project, path }) => {
-      assertMcpOperationAllowed('read');
+      assertMcpOperationAllowed('READ');
       try {
         const scope = resolveMcpProjectScope(options.dataRoot, project);
         const document = readMcpProjectDocument(scope, path);
@@ -53,7 +53,7 @@ export function registerMcpDocumentTools(
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },
     ({ project, paths, max_tokens: maxTokens }) => {
-      assertMcpOperationAllowed('read');
+      assertMcpOperationAllowed('READ');
       try {
         const scope = resolveMcpProjectScope(options.dataRoot, project);
         const sortedPaths = [...new Set(paths)].sort(comparePaths);
@@ -114,7 +114,7 @@ export function registerMcpDocumentTools(
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },
     ({ project, path }) => {
-      assertMcpOperationAllowed('read');
+      assertMcpOperationAllowed('METADATA');
       try {
         const scope = resolveMcpProjectScope(options.dataRoot, project);
         const document = readMcpProjectDocument(scope, path);

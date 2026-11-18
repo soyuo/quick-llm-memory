@@ -13,26 +13,31 @@ import type { EmbeddingProvider } from '../providers/provider.js';
 import { registerMcpTools } from './tools.js';
 import { registerMcpResources } from './resources.js';
 import { registerMcpPrompts } from './prompts.js';
+import { runWithMcpPermissions, type McpPermission } from './access.js';
 
 export const mcpRequestSignal = new AsyncLocalStorage<AbortSignal>();
 
 export interface ServeMcpStdioOptions {
   transport?: ServeStdioOptions['transport'];
   onError?: (error: Error) => void;
+  serverOptions?: CreateMcpServerOptions;
 }
 
 export interface CreateMcpServerOptions {
   dataRoot?: string;
   embeddingProviderFactory?: () => { provider: EmbeddingProvider; model: string };
   onToolExecutionChange?: (delta: 1 | -1) => void;
+  permissions?: ReadonlySet<McpPermission>;
 }
 
 export function createMcpServer(options: CreateMcpServerOptions = {}): McpServer {
+  const paths = resolveSettingsPaths();
+  const permissions = options.permissions ?? new Set<McpPermission>(loadSettings({ paths }).mcp.permissions);
   const server = new McpServer({
     name: 'quick-llm-memory',
     version: packageMetadata.version,
   });
-  if (options.onToolExecutionChange !== undefined) {
+  {
     const registerTool = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
     server.registerTool = ((...args: unknown[]) => {
       const last = args.length - 1;
@@ -48,7 +53,10 @@ export function createMcpServer(options: CreateMcpServerOptions = {}): McpServer
                 ? { ...context, signal }
                 : { signal };
             }
-            return await callback(...callbackArgs);
+            return await runWithMcpPermissions(
+              permissions,
+              () => callback(...callbackArgs),
+            );
           } finally {
             options.onToolExecutionChange?.(-1);
           }
@@ -57,7 +65,6 @@ export function createMcpServer(options: CreateMcpServerOptions = {}): McpServer
       return registerTool(...args);
     }) as typeof server.registerTool;
   }
-  const paths = resolveSettingsPaths();
   const dataRoot = options.dataRoot ?? paths.dataRoot;
   registerMcpTools(server, {
     dataRoot,
@@ -69,7 +76,7 @@ export function createMcpServer(options: CreateMcpServerOptions = {}): McpServer
       };
     }),
   });
-  registerMcpResources(server, { dataRoot });
+  registerMcpResources(server, { dataRoot, permissions });
   registerMcpPrompts(server);
   return server;
 }
@@ -77,7 +84,7 @@ export function createMcpServer(options: CreateMcpServerOptions = {}): McpServer
 export function serveMcpStdio(
   options: ServeMcpStdioOptions = {},
 ): StdioServerHandle {
-  return serveStdio(() => createMcpServer(), {
+  return serveStdio(() => createMcpServer(options.serverOptions), {
     transport: options.transport,
     onerror: (error) => {
       if (options.onError !== undefined) {

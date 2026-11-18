@@ -120,6 +120,19 @@ describe('loadSettings', () => {
     expect(() => loadSettings({ paths })).toThrow(/logging\.level/);
   });
 
+  it('defaults MCP permissions and rejects unknown permission names', () => {
+    expect(loadSettings({ paths: createSettingsPaths() }).mcp.permissions).toEqual([
+      'READ', 'SEARCH', 'METADATA',
+    ]);
+
+    const paths = createSettingsPaths();
+    mkdirSync(paths.configDir, { recursive: true });
+    writeFileSync(paths.configFile, 'mcp:\n  permissions:\n    - READ\n    - EXECUTE\n');
+
+    expect(() => loadSettings({ paths })).toThrow(ConfigurationError);
+    expect(() => loadSettings({ paths })).toThrow(/mcp\.permissions/);
+  });
+
   it('rejects a blank configured AI model', () => {
     const paths = createSettingsPaths();
     mkdirSync(paths.configDir, { recursive: true });

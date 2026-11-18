@@ -152,8 +152,8 @@ describe('MCP read-only project access', () => {
     const sourceBefore = readFileSync(sourcePath);
     const databaseBefore = readFileSync(databasePath);
 
-    expect(() => assertMcpOperationAllowed('write')).toThrow(InputError);
-    expect(() => assertMcpOperationAllowed('unknown-operation')).toThrow(InputError);
+    expect(() => assertMcpOperationAllowed('PROPOSE_WRITE')).toThrow(InputError);
+    expect(() => assertMcpOperationAllowed('ADMIN')).toThrow(InputError);
     expect(readFileSync(sourcePath).equals(sourceBefore)).toBe(true);
     expect(readFileSync(databasePath).equals(databaseBefore)).toBe(true);
   });

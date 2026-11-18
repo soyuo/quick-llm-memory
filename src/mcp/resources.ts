@@ -6,7 +6,7 @@ import { buildKnowledgeTree, type CategoryTreeNode, type DocumentTreeNode } from
 import { readStoredMarkdownResource } from '../markdown/repository.js';
 import { listProjects } from '../projects/manager.js';
 import { validateProjectName } from '../projects/schema.js';
-import { assertMcpOperationAllowed, resolveMcpProjectScope } from './access.js';
+import { assertMcpOperationAllowed, resolveMcpProjectScope, type McpPermission } from './access.js';
 
 export interface KnowledgeResourceUri {
   project: string;
@@ -15,6 +15,7 @@ export interface KnowledgeResourceUri {
 
 export interface RegisterMcpResourcesOptions {
   dataRoot: string;
+  permissions?: ReadonlySet<McpPermission>;
 }
 
 export function parseKnowledgeResourceUri(uri: string): KnowledgeResourceUri {
@@ -56,12 +57,13 @@ export function registerMcpResources(
   server: McpServer,
   options: RegisterMcpResourcesOptions,
 ): void {
-  assertMcpOperationAllowed('read');
+  const permissions = options.permissions ?? new Set<McpPermission>(['READ', 'SEARCH', 'METADATA']);
   server.registerResource(
     'project-knowledge-markdown',
     new ResourceTemplate('qlm://{project}{+path}', {
       list: async () => {
         try {
+          if (!permissions.has('READ') && !permissions.has('ADMIN')) throw new InputError('MCP permission READ is not enabled.');
           return { resources: listKnowledgeResources(options.dataRoot) };
         } catch {
           throw new Error('Unable to list project knowledge resources.');
@@ -75,9 +77,10 @@ export function registerMcpResources(
     },
     async (uri) => {
       try {
+        if (!permissions.has('READ') && !permissions.has('ADMIN')) throw new InputError('MCP permission READ is not enabled.');
         const resource = parseKnowledgeResourceUri(uri.href);
         const scope = resolveMcpProjectScope(options.dataRoot, resource.project);
-        assertMcpOperationAllowed('read');
+        assertMcpOperationAllowed('READ');
         const stored = readStoredMarkdownResource(scope.knowledgeRoot, resource.path);
         return {
           contents: [{
