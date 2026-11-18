@@ -38,6 +38,26 @@ afterEach(() => {
 });
 
 describe('qlm build command', () => {
+  it('does not commit generated Markdown or rebuild the index when snapshot creation fails', async () => {
+    const { dataRoot, project, projectRoot, knowledgeRoot } = createProject();
+    writeFileSync(join(dataRoot, 'snapshots'), 'blocks snapshot directory');
+    const sourcePath = createSourceFile();
+    const source = loadMarkdownSources(sourcePath)[0];
+    if (source === undefined) throw new Error('Expected a source fixture.');
+    const parsed = await new MarkdownDocumentParser().parse(source);
+    const provider = new FakeBuildProvider(createHierarchy(parsed.sections.map(({ id }) => id)));
+    const result = await runBuild(dataRoot, sourcePath, {
+      settings: settingsSchema.parse({ ai: { provider: 'openai', model: 'test-model' } }),
+      providerFactory: () => provider,
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(existsSync(knowledgeRoot)).toBe(false);
+    expect(existsSync(resolveProjectDatabasePath(projectRoot))).toBe(false);
+    expect(provider.requests.length).toBeGreaterThan(0);
+    expect(project.name).toBe('demo');
+  });
+
   it('generates source-tracked documents and rebuilds the project index', async () => {
     const { dataRoot, project, projectRoot } = createProject();
     const sourcePath = createSourceFile();

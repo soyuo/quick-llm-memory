@@ -105,3 +105,12 @@ indexes are omitted. Each snapshot is published only after its files and version
 manifest have been written successfully. Symlinks and changed-during-copy files are
 rejected. Keep only snapshots needed for recovery and remove old snapshot directories
 manually when retention is no longer required. Restore is not yet supported.
+
+The application also snapshots before full or incremental knowledge regeneration,
+project rename, and confirmed project deletion. Snapshot manifests record the operation
+and reason. Read-only and no-op builds do not create snapshots. If snapshot creation
+or verification fails, the destructive operation is aborted before project files are
+changed. Snapshots are retained until an operator removes them manually; the application
+does not automatically delete the last known-good snapshot.
+
+Markdown document moves also require a verified pre-move snapshot. No migration operation currently exists; rebuildable SQLite indexes remain excluded. Old snapshots are retained until manual cleanup.

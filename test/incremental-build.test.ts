@@ -19,6 +19,7 @@ import { validateKnowledgeHierarchy } from '../src/knowledge/hierarchy-validator
 import type { HierarchyNode } from '../src/knowledge/planner.js';
 import { loadMarkdownSources } from '../src/knowledge/source.js';
 import { initializeProject } from '../src/projects/manager.js';
+import { listProjectSnapshots } from '../src/projects/snapshots.js';
 import type {
   AIProvider,
   GenerateRequest,
@@ -238,6 +239,7 @@ describe('incremental knowledge builds', () => {
       provider: new IncrementalProvider(createHierarchy(sections)),
       model: 'test-model',
     });
+    const snapshotsBeforeNoOp = listProjectSnapshots(fixture.dataRoot, fixture.project.id);
     const databasePath = resolveProjectDatabasePath(fixture.projectRoot);
     const filesBefore = ['alpha.md', 'beta.md'].map((name) =>
       readFileSync(join(fixture.knowledgeRoot, name)),
@@ -261,6 +263,7 @@ describe('incremental knowledge builds', () => {
     });
 
     expect(result.noOp).toBe(true);
+    expect(listProjectSnapshots(fixture.dataRoot, fixture.project.id)).toEqual(snapshotsBeforeNoOp);
     expect(provider.requests).toHaveLength(0);
     expect(['alpha.md', 'beta.md'].map((name) => readFileSync(join(fixture.knowledgeRoot, name)))).toEqual(filesBefore);
     expect(hashFile(databasePath)).toBe(databaseBefore);
@@ -520,7 +523,7 @@ function createFixture() {
   temporaryDirectories.push(sourceDirectory);
   const sourcePath = join(sourceDirectory, 'source.md');
   writeFileSync(sourcePath, sourceText('Alpha content original.', 'Beta content remains.'), 'utf8');
-  return { projectRoot, knowledgeRoot, sourcePath, project };
+  return { dataRoot, projectRoot, knowledgeRoot, sourcePath, project };
 }
 
 function sourceText(alpha: string, beta: string): string {

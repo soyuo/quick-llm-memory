@@ -23,6 +23,7 @@ import {
 import { stringify as stringifyYaml } from 'yaml';
 import { ConfigurationError } from '../config/error.js';
 import { InputError, InternalError } from '../errors/qlm-error.js';
+import { createProjectSnapshot } from '../projects/snapshots.js';
 import {
   assertNoSymlinkComponents,
   removeFileIfPresent,
@@ -209,6 +210,7 @@ export function moveMarkdownDocument(
   knowledgeRoot: string,
   sourceRelativePath: string,
   targetRelativePath: string,
+  snapshotContext: { dataRoot: string; projectId: string; projectName: string },
 ) {
   const root = ensureKnowledgeRoot(knowledgeRoot, false);
   const sourcePath = resolveDocumentPath(root, sourceRelativePath);
@@ -237,6 +239,11 @@ export function moveMarkdownDocument(
   assertRegularDocument(parsedSource, sourcePath);
   ensureSafeParentDirectories(root, targetPath, true);
   assertNoSymlinkComponents(root, targetPath);
+
+  createProjectSnapshot(snapshotContext.dataRoot, snapshotContext.projectId, snapshotContext.projectName, {
+    operation: 'markdown-move',
+    reason: `move:${sourceRelativePath}->${targetRelativePath}`,
+  });
 
   try {
     writeNewFileAtomically(targetPath, sourceContents);

@@ -25,6 +25,7 @@ import {
   setProjectArchived,
 } from '../src/projects/manager.js';
 import { projectMetadataSchema } from '../src/projects/schema.js';
+import { listProjectSnapshots } from '../src/projects/snapshots.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -141,7 +142,23 @@ describe('project management', () => {
     expect(existsSync(join(dataRoot, 'projects', 'old-name'))).toBe(false);
     expect(readFileSync(join(dataRoot, 'projects', 'new-name', 'knowledge', 'notes.md'), 'utf8'))
       .toBe('# Keep this document\n');
+    expect(listProjectSnapshots(dataRoot, original.id)[0]).toMatchObject({
+      operation: 'project-rename',
+      reason: 'rename:old-name->new-name',
+    });
     expect(listProjects(dataRoot).map(({ name }) => name)).toEqual(['new-name']);
+  });
+
+  it('does not rename when the pre-operation snapshot cannot be created', () => {
+    const dataRoot = createTemporaryDirectory('qlm-project-rename-snapshot-failure-');
+    initializeProject(dataRoot, 'before');
+    const source = join(dataRoot, 'projects', 'before', 'project.yaml');
+    const original = readFileSync(source);
+    writeFileSync(join(dataRoot, 'snapshots'), 'blocks snapshot directory');
+    expect(() => renameProject(dataRoot, 'before', 'after')).toThrow();
+    expect(existsSync(join(dataRoot, 'projects', 'before'))).toBe(true);
+    expect(existsSync(join(dataRoot, 'projects', 'after'))).toBe(false);
+    expect(readFileSync(source)).toEqual(original);
   });
 
   it('rejects rename collisions without changing either project', () => {
@@ -197,7 +214,7 @@ describe('project management', () => {
 
   it('deletes only after exact-name confirmation and preserves neighboring projects', () => {
     const dataRoot = createTemporaryDirectory('qlm-project-delete-');
-    initializeProject(dataRoot, 'remove-me');
+    const removedProject = initializeProject(dataRoot, 'remove-me');
     initializeProject(dataRoot, 'keep-me');
     const userFile = join(dataRoot, 'projects', 'remove-me', 'knowledge', 'notes.md');
     mkdirSync(join(dataRoot, 'projects', 'remove-me', 'knowledge'));
@@ -209,6 +226,21 @@ describe('project management', () => {
     deleteProject(dataRoot, 'remove-me', 'remove-me');
     expect(existsSync(join(dataRoot, 'projects', 'remove-me'))).toBe(false);
     expect(listProjects(dataRoot).map(({ name }) => name)).toEqual(['keep-me']);
+    expect(listProjectSnapshots(dataRoot, removedProject.id)[0]).toMatchObject({
+      operation: 'project-delete',
+      reason: 'confirmed-project-deletion',
+    });
+  });
+
+  it('does not delete a project when its pre-operation snapshot fails', () => {
+    const dataRoot = createTemporaryDirectory('qlm-project-delete-snapshot-failure-');
+    const project = initializeProject(dataRoot, 'keep-on-failure');
+    const source = join(dataRoot, 'projects', project.name, 'project.yaml');
+    const original = readFileSync(source);
+    writeFileSync(join(dataRoot, 'snapshots'), 'blocks snapshot directory');
+    expect(() => deleteProject(dataRoot, project.name, project.name)).toThrow();
+    expect(existsSync(join(dataRoot, 'projects', project.name))).toBe(true);
+    expect(readFileSync(source)).toEqual(original);
   });
 
   it('registers init and list commands and logs project creation', async () => {
