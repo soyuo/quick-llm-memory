@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -25,7 +25,8 @@ describe('project snapshots', () => {
   it('recovers a project backup left by an interrupted directory swap', async () => {
     const { root, project } = setup();
     const snapshot = createProjectSnapshot(root, project.id, project.name);
-    const projectsRoot = join(root, 'projects');
+    const canonicalRoot = realpathSync(root);
+    const projectsRoot = join(canonicalRoot, 'projects');
     const projectRoot = join(projectsRoot, project.name);
     const backup = join(projectsRoot, `.${project.name}.123e4567-e89b-12d3-a456-426614174000.backup`);
     const stage = join(projectsRoot, `.${project.name}.123e4567-e89b-12d3-a456-426614174000.restore`);
