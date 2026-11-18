@@ -70,33 +70,24 @@ Use `qlm` from a terminal at least 60 columns by 16 rows; 100 by 24 or larger gi
 
 Run `qlm --help` for the complete syntax. Common commands:
 
-| Command | Purpose |
+| Command | Purpose and example |
 | --- | --- |
-| `qlm init <name>` | Create a project. |
-| `qlm build <source> --project <name>` | Generate or update project knowledge from source files. |
-| `qlm project list [--json]` | List projects (optionally as JSON). |
-| `qlm project info <name>` | Show project details. |
-| `qlm project remove <name> --yes` | Remove a project after explicit confirmation. |
-| `qlm project import <source> [--name <name>]` | Import a project bundle. |
-| `qlm project export <name> <destination>` | Export a project bundle. |
-| `qlm tree --project <name> [--depth <number>]` | Print the knowledge tree. |
-| `qlm read <path> --project <name>` | Read a knowledge document. |
-| `qlm search <query> --project <name> [--mode <mode>]` | Search project knowledge. Modes include `path`, `hierarchical`, `fulltext`, `semantic`, and `hybrid`. |
-| `qlm validate --project <name>` | Check project knowledge and index consistency. |
-| `qlm reindex --project <name> [--no-embeddings]` | Rebuild the search index; `--no-embeddings` uses lexical indexing only. |
-| `qlm snapshot create <name>` | Create a project snapshot. Use `snapshot list <name>` to list snapshots and `snapshot restore <name> <snapshot-id>` to restore one (requires confirmation or `--yes`). |
-| `qlm mcp serve [--transport stdio\|http]` | Run the MCP server. |
-| `qlm mcp config <claude-code\|cursor\|vscode>` | Print client setup configuration. |
-
-Examples:
-
-```sh
-qlm project list --json
-qlm tree --project product-notes --depth 3
-qlm search "release process" --project product-notes --mode hybrid --max-results 5
-qlm validate --project product-notes
-qlm snapshot create product-notes
-```
+| `qlm init <name>` | Create a project. Example: `qlm init product-notes` |
+| `qlm build <source> --project <name>` | Generate or update project knowledge from source files. Example: `qlm build ./docs --project product-notes` |
+| `qlm project list [--json]` | List projects, optionally as JSON. Example: `qlm project list --json` |
+| `qlm project info <name>` | Show project details. Example: `qlm project info product-notes` |
+| `qlm project remove <name> --yes` | Remove a project after explicit confirmation. Example: `qlm project remove old-notes --yes` |
+| `qlm project import <source> [--name <name>]` | Import a project bundle. Example: `qlm project import ./backup --name restored-notes` |
+| `qlm project export <name> <destination>` | Export a project bundle. Example: `qlm project export product-notes ./backup` |
+| `qlm tree --project <name> [--depth <number>]` | Print the knowledge tree. Example: `qlm tree --project product-notes --depth 3` |
+| `qlm read <path> --project <name>` | Read a knowledge document. Example: `qlm read overview.md --project product-notes` |
+| `qlm search <query> --project <name> [--mode <mode>]` | Search using `path`, `hierarchical`, `fulltext`, `semantic`, or `hybrid`. Example: `qlm search "release process" --project product-notes --mode hybrid --max-results 5` |
+| `qlm validate --project <name>` | Check internal Markdown links. Example: `qlm validate --project product-notes` |
+| `qlm reindex --project <name> [--no-embeddings]` | Rebuild the search index; `--no-embeddings` uses lexical indexing only. Example: `qlm reindex --project product-notes --no-embeddings` |
+| `qlm snapshot create <name>` / `list <name>` / `restore <name> <snapshot-id>` | Create, list, or restore snapshots. Restore requires confirmation or `--yes`. Example: `qlm snapshot create product-notes` |
+| `qlm mcp serve [--transport stdio\|http]` | Run the MCP server. Example: `qlm mcp serve --transport http` |
+| `qlm mcp config <claude-code\|cursor\|vscode>` | Print client setup configuration. Example: `qlm mcp config cursor` |
+| `qlm mcp approve <proposal-id>` / `cancel <proposal-id>` | Approve or discard a pending document update proposal. Example: `qlm mcp cancel proposal-123` |
 
 Semantic search needs an embedding-capable provider and indexed embeddings. Hybrid search can fall back to lexical retrieval when embedding configuration is unavailable. Search limits such as `--max-results` require an explicit `--mode`. `qlm mcp --help` shows the MCP approval and server management commands; see [docs/mcp.md](docs/mcp.md) for client setup and transport details.
 
