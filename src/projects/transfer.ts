@@ -26,9 +26,13 @@ const PROJECTS_DIRECTORY = 'projects';
 const PROJECT_METADATA_FILE = 'project.yaml';
 const packageRoot = findPackageRoot(dirname(fileURLToPath(import.meta.url)));
 const require = createRequire(join(packageRoot, 'package.json'));
-const { renameNoReplace } = require('./build/Release/qlm_rename_noreplace.node') as {
-  renameNoReplace(source: string, destination: string): void;
-};
+
+function renameNoReplace(source: string, destination: string): void {
+  const native = require('./build/Release/qlm_rename_noreplace.node') as {
+    renameNoReplace(source: string, destination: string): void;
+  };
+  native.renameNoReplace(source, destination);
+}
 
 export type ProjectTransferOperation = 'import' | 'export';
 export type ProjectTransferPhase = 'validating' | 'copying' | 'committing';

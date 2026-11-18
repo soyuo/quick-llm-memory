@@ -27,6 +27,13 @@
   "bin": {
     "qlm": "./dist/index.js"
   },
+  "files": [
+    "dist",
+    "docs",
+    "LICENSE",
+    "binding.gyp",
+    "native"
+  ],
   "dependencies": {
     "@modelcontextprotocol/client": "^2.4.0",
     "@modelcontextprotocol/node": "^2.1.2",
