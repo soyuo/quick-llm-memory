@@ -19,6 +19,24 @@ afterEach(() => {
 });
 
 describe('TUI Settings', () => {
+  it('offers the subscription CLI providers with login guidance', async () => {
+    const paths = createPaths();
+    mkdirSync(paths.configDir, { recursive: true });
+    writeFileSync(paths.configFile, 'ai:\n  provider: openai\nlogging:\n  level: info\n');
+    const app = render(<TuiApp dataRoot={paths.dataRoot} settingsPaths={paths} />);
+    apps.push(app);
+
+    await openSettings(app);
+    app.stdin.write('\u001b[C');
+    await flushInkEffects();
+    app.stdin.write('\u001b[C');
+    await waitForFrame(app, 'AI Provider: codex-cli');
+    expect(app.lastFrame()).toContain('qlm auth login codex');
+    app.stdin.write('\u001b[C');
+    await waitForFrame(app, 'AI Provider: claude-code');
+    expect(app.lastFrame()).toContain('qlm auth login claude');
+  });
+
   it('warns about unsaved changes before discarding them', async () => {
     const paths = createPaths();
     mkdirSync(paths.configDir, { recursive: true });

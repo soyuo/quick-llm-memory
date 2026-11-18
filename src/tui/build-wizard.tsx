@@ -39,10 +39,13 @@ export type BuildWizardStep =
   | 'failed'
   | 'complete';
 
+export const AI_PROVIDERS = ['openai', 'openai-compatible', 'codex-cli', 'claude-code'] as const;
+export type AiProviderName = (typeof AI_PROVIDERS)[number];
+
 export interface BuildWizardDraft {
   projectName: string;
   sourcePath: string;
-  provider: 'openai' | 'openai-compatible';
+  provider: AiProviderName;
   model: string;
   minDepth: string;
   maxDepth: string;
@@ -137,7 +140,7 @@ export function validateBuildWizardStep(
     return undefined;
   }
   if (step === 'provider') {
-    return ['openai', 'openai-compatible'].includes(draft.provider)
+    return AI_PROVIDERS.includes(draft.provider)
       ? undefined
       : 'Choose a supported AI provider.';
   }
@@ -456,7 +459,7 @@ export function BuildWizard({
       if (field === 'provider') {
         setDraft((current) => ({
           ...current,
-          provider: current.provider === 'openai' ? 'openai-compatible' : 'openai',
+          provider: AI_PROVIDERS[(AI_PROVIDERS.indexOf(current.provider) + (key.leftArrow || key.upArrow ? AI_PROVIDERS.length - 1 : 1)) % AI_PROVIDERS.length] ?? 'openai',
         }));
       } else if (field === 'autoDepth' || field === 'preserveCodeBlocks' || field === 'preserveTables') {
         setDraft((current) => ({ ...current, [field]: !current[field] }));
@@ -521,6 +524,7 @@ export function BuildWizard({
       {step === 'project' ? field('projectName', draft.projectName) : null}
       {step === 'sources' ? field('sourcePath', draft.sourcePath) : null}
       {step === 'provider' ? <Text>{activeField === 'provider' ? '> ' : '  '}provider: {draft.provider}</Text> : null}
+      {step === 'provider' ? <Text dimColor>Left/Right changes provider. codex-cli and claude-code use your subscription login (qlm auth login).</Text> : null}
       {step === 'model' ? field('model', draft.model) : null}
       {step === 'hierarchy' ? (
         <>
