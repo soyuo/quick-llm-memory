@@ -63,3 +63,15 @@ without an Origin header remain available to non-browser clients when they pass
 authentication; browser origins outside the allowlist are rejected.
 
 HTTP requests are limited to 60 requests per client IP per fixed 60-second window. Excess /mcp requests receive 429 with Retry-After: 60 before MCP dispatch. Limiter state is capped at 4,096 clients and expired windows are removed as requests arrive. Access records include method, normalized route, status, and duration; they omit request bodies, query strings, authorization values, and client addresses.
+
+### Tool permissions
+
+MCP permissions are configured in `config.yaml` under `mcp.permissions`. The first-run default is `READ`, `SEARCH`, and `METADATA`. Registered project/document reads and resources require `READ`; retrieval tools require `SEARCH`; metadata inspection and validation require `METADATA`. `PROPOSE_WRITE` and `APPROVED_WRITE` are reserved for write workflows, while `ADMIN` grants all permission checks. Unknown permission names or malformed settings fail during configuration loading. The same policy is applied to stdio and HTTP servers.
+
+```yaml
+mcp:
+  permissions:
+    - READ
+    - SEARCH
+    - METADATA
+```

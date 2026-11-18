@@ -19,6 +19,36 @@ import { mcpRequestSignal, serveMcpStdio } from '../src/mcp/server.js';
 import { initializeProject } from '../src/projects/manager.js';
 
 describe('MCP server bootstrap', () => {
+  it('enforces restricted permissions over stdio and HTTP transports', async () => {
+    const restrictedPermissions = new Set(['SEARCH'] as const);
+    const [stdioClientTransport, stdioServerTransport] = InMemoryTransport.createLinkedPair();
+    const stdioHandle = serveMcpStdio({
+      transport: stdioServerTransport,
+      serverOptions: { permissions: restrictedPermissions },
+    });
+    const stdioClient = new Client({ name: 'restricted-stdio', version: '1.0.0' });
+    const dataRoot = mkdtempSync(join(tmpdir(), 'qlm-mcp-permissions-'));
+    const httpServer = await serveMcpHttp({
+      host: '127.0.0.1', port: 0, dataRoot, permissions: restrictedPermissions,
+    });
+    const httpClient = new Client({ name: 'restricted-http', version: '1.0.0' });
+    try {
+      await stdioClient.connect(stdioClientTransport);
+      const stdioResult = await stdioClient.callTool({ name: 'memory_list_projects', arguments: {} });
+      expect(stdioResult.isError).toBe(true);
+
+      await httpClient.connect(new StreamableHTTPClientTransport(new URL(httpServer.url)));
+      const httpResult = await httpClient.callTool({ name: 'memory_list_projects', arguments: {} });
+      expect(httpResult.isError).toBe(true);
+    } finally {
+      await stdioClient.close().catch(() => {});
+      await stdioHandle.close();
+      await httpClient.close().catch(() => {});
+      await httpServer.close();
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  });
+
   it('connects a local client and closes the MCP server', async () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const handle = serveMcpStdio({ transport: serverTransport });

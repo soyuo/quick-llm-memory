@@ -18,6 +18,9 @@ export const settingsSchema = z
       })
       .passthrough()
       .optional(),
+    mcp: z.object({
+      permissions: z.array(z.enum(['READ', 'SEARCH', 'METADATA', 'PROPOSE_WRITE', 'APPROVED_WRITE', 'ADMIN'])).default(['READ', 'SEARCH', 'METADATA']),
+    }).default({ permissions: ['READ', 'SEARCH', 'METADATA'] }),
   })
   .passthrough();
 
