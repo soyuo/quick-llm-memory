@@ -12,7 +12,7 @@ QLM is local-first: project files and its search index are stored on your comput
   - Windows: Visual Studio C++ Build Tools.
   - macOS: Xcode Command Line Tools.
   - Linux: `make` and a C/C++ compiler.
-- An OpenAI API key for AI knowledge generation. OpenAI-compatible endpoints can also be configured.
+- An AI provider for knowledge generation: an OpenAI API key (OpenAI-compatible endpoints also work), or a Codex (ChatGPT) or Claude Code subscription with the matching `codex` or `claude` CLI installed.
 
 ## Install from source
 
@@ -28,7 +28,9 @@ npm link
 
 ## Quick start
 
-Set your API key in the environment. Keep it out of `config.yaml` and source control.
+Choose one way to authenticate. Keep credentials out of `config.yaml` and source control.
+
+**Option A: API key.** Set your key in the environment.
 
 ```sh
 # macOS / Linux
@@ -37,6 +39,16 @@ export OPENAI_API_KEY="your-api-key"
 # Windows PowerShell
 $env:OPENAI_API_KEY = "your-api-key"
 ```
+
+**Option B: subscription login.** Install the `codex` and/or `claude` CLI, sign in through the browser, then select the provider in `config.yaml` or TUI Settings. No API key is needed for knowledge builds.
+
+```sh
+qlm auth login codex     # ChatGPT subscription; add --device when no browser is available
+qlm auth login claude    # Claude Code (Anthropic account)
+qlm auth status          # check both logins
+```
+
+Then set `ai.provider` to `codex-cli` or `claude-code`. See [docs/ai-providers.md](docs/ai-providers.md).
 
 Create a project, then build knowledge from a folder of source files:
 
@@ -85,6 +97,7 @@ Run `qlm --help` for the complete syntax. Common commands:
 | `qlm validate --project <name>` | Check internal Markdown links. Example: `qlm validate --project product-notes` |
 | `qlm reindex --project <name> [--no-embeddings]` | Rebuild the search index; `--no-embeddings` uses lexical indexing only. Example: `qlm reindex --project product-notes --no-embeddings` |
 | `qlm snapshot create <name>` / `list <name>` / `restore <name> <snapshot-id>` | Create, list, or restore snapshots. Restore requires confirmation or `--yes`. Example: `qlm snapshot create product-notes` |
+| `qlm auth login <codex\|claude> [--device]` / `status [provider]` / `logout <provider>` | Sign in to a subscription provider through the vendor CLI's browser flow, check login status, or sign out. QLM does not store the tokens. Example: `qlm auth login codex` |
 | `qlm mcp serve [--transport stdio\|http]` | Run the MCP server. Example: `qlm mcp serve --transport http` |
 | `qlm mcp config <claude-code\|cursor\|vscode>` | Print client setup configuration. Example: `qlm mcp config cursor` |
 | `qlm mcp approve <proposal-id>` / `cancel <proposal-id>` | Approve or discard a pending document update proposal. Example: `qlm mcp cancel proposal-123` |
@@ -113,7 +126,7 @@ logging:
   level: info
 ```
 
-`provider` may be `openai` or `openai-compatible`. The model is provider-dependent; set a model supported by your endpoint. `cache_generation` is enabled by default and caches generation results locally; disable it if you do not want those results cached. Set `OPENAI_API_KEY` in the environment. For an OpenAI-compatible endpoint, also set `OPENAI_BASE_URL` (defaults to `https://api.openai.com/v1`). Secrets are not stored in the YAML file.
+`provider` may be `openai`, `openai-compatible`, `codex-cli`, or `claude-code`. The model is provider-dependent; set a model supported by your endpoint or CLI. `codex-cli` and `claude-code` use your subscription login (see `qlm auth`) and do not provide embeddings, so semantic search and embedding indexing still need `openai` with an API key; lexical modes work without it. `cache_generation` is enabled by default and caches generation results locally; disable it if you do not want those results cached. Set `OPENAI_API_KEY` in the environment. For an OpenAI-compatible endpoint, also set `OPENAI_BASE_URL` (defaults to `https://api.openai.com/v1`). Secrets are not stored in the YAML file.
 
 Project data defaults to the operating system's local application-data directory. Set `QLM_HOME` to choose a different data root; this does not move the configuration file. Existing data is not moved automatically. See [docs/mcp.md](docs/mcp.md), [docs/tui.md](docs/tui.md), and [docs/standalone.md](docs/standalone.md) for more details.
 
