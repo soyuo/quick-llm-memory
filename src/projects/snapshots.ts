@@ -141,7 +141,7 @@ export async function restoreProjectSnapshot(
   if (!uuidPattern.test(snapshotId)) throw new InputError('Snapshot ID is invalid.');
   const root = realpathSync(resolve(dataRoot));
   const projectRoot = join(root, 'projects', projectName);
-  recoverInterruptedRestore(root, projectName, projectRoot);
+  recoverInterruptedProjectRestore(root, projectName);
   if (realpathSync(projectRoot) !== projectRoot) throw new InputError('Project path is not canonical.');
   const manifest = listProjectSnapshots(root, projectId).find((item) => item.id === snapshotId);
   if (!manifest || manifest.projectName !== projectName) throw new InputError('Snapshot does not belong to this project.');
@@ -197,7 +197,9 @@ export async function restoreProjectSnapshot(
   }
 }
 
-function recoverInterruptedRestore(root: string, projectName: string, projectRoot: string): void {
+export function recoverInterruptedProjectRestore(root: string, projectName: string): void {
+  validateProjectName(projectName);
+  const projectRoot = resolve(root, 'projects', projectName);
   const projectsRoot = join(root, 'projects');
   const journal = join(projectsRoot, `.${projectName}.restore-journal.json`);
   if (!existsSync(journal)) return;
