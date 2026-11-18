@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { lstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join, parse, resolve } from 'node:path';
+import { lstatSync, mkdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import { parse as parseYaml } from 'yaml';
 import { InputError } from '../errors/qlm-error.js';
@@ -29,20 +29,14 @@ const proposalSchema = z.object({
 export type StoredDocumentProposal = z.infer<typeof proposalSchema>;
 
 function ensureProposalDirectory(dataRoot: string): string {
-  const absoluteRoot = resolve(dataRoot);
-  let current = parse(absoluteRoot).root;
-  for (const part of absoluteRoot.slice(current.length).split(/[\\/]/u).filter(Boolean)) {
-    current = join(current, part);
-    try {
-      const stat = lstatSync(current);
-      if (stat.isSymbolicLink() || !stat.isDirectory()) throw new InputError('Proposal storage path is invalid.');
-    } catch (error) {
-      if (error instanceof InputError || !(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
-      mkdirSync(current);
-    }
-  }
+  const absoluteRoot = realpathSync(resolve(dataRoot));
+  if (!lstatSync(absoluteRoot).isDirectory()) throw new InputError('Proposal storage path is invalid.');
   const directory = join(absoluteRoot, 'mcp-proposals');
-  mkdirSync(directory, { recursive: true });
+  try {
+    mkdirSync(directory);
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+  }
   const info = lstatSync(directory);
   if (!info.isDirectory() || info.isSymbolicLink()) throw new InputError('Proposal storage path is invalid.');
   return directory;
