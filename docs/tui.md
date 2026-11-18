@@ -61,4 +61,4 @@ At 100 columns by 24 rows or larger, navigation and content appear side by side.
 
 ## Deterministic workflow verification
 
-Run `npx vitest run test/tui-workflows.test.tsx` to exercise project creation, build preview and confirmation, generation progress, document browsing, search, MCP connection guidance, and terminal resizing with local fixtures. The fake provider and MCP check make no network requests and require no provider credentials. The success flow creates `e2e-project` with `notes.md`; the failure flow displays the fixture error and leaves the project's knowledge directory and database absent.
+Run `npx vitest run test/tui/tui-workflows.test.tsx` to exercise project creation, build preview and confirmation, generation progress, document browsing, search, MCP connection guidance, and terminal resizing with local fixtures. The fake provider and MCP check make no network requests and require no provider credentials. The success flow creates `e2e-project` with `notes.md`; the failure flow displays the fixture error and leaves the project's knowledge directory and database absent.
