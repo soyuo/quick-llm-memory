@@ -146,7 +146,9 @@ export function registerProjectCommands(
             provider,
             model,
             cacheGeneration: settings.ai?.cache_generation ?? true,
-            embeddingModel: settings.ai?.embedding_model ?? 'text-embedding-3-small',
+            ...(isEmbeddingProvider(provider)
+              ? { embeddingModel: settings.ai?.embedding_model ?? 'text-embedding-3-small' }
+              : {}),
             signal: controller.signal,
             onProgress: (event) => {
               const counts =

@@ -1,4 +1,5 @@
 import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { ClaudeCodeProvider, CodexCliProvider } from '../../src/providers/cli-provider.js';
 import type { CliRunner } from '../../src/providers/cli-runner.js';
@@ -8,7 +9,7 @@ import { settingsSchema } from '../../src/config/schema.js';
 describe('Codex CLI provider', () => {
   it('runs codex exec read-only with the prompt on stdin and reads the last message', async () => {
     const runner = vi.fn<CliRunner>(async (_command, args, options) => {
-      writeFileSync(args[args.indexOf('-o') + 1]!, 'generated text\n');
+      writeFileSync(join(options!.cwd!, args[args.indexOf('-o') + 1]!), 'generated text\n');
       expect(options?.input).toBe('system\n\nhello');
       return { stdout: '', stderr: '', exitCode: 0 };
     });
@@ -24,9 +25,9 @@ describe('Codex CLI provider', () => {
   });
 
   it('passes a schema file and parses structured output', async () => {
-    const runner = vi.fn<CliRunner>(async (_command, args) => {
+    const runner = vi.fn<CliRunner>(async (_command, args, options) => {
       expect(args).toContain('--output-schema');
-      writeFileSync(args[args.indexOf('-o') + 1]!, '{"ok":true}');
+      writeFileSync(join(options!.cwd!, args[args.indexOf('-o') + 1]!), '{"ok":true}');
       return { stdout: '', stderr: '', exitCode: 0 };
     });
     const provider = new CodexCliProvider({ runner });
@@ -34,6 +35,12 @@ describe('Codex CLI provider', () => {
     await expect(provider.generateStructured<{ ok: boolean }>({
       model: 'gpt-5', prompt: 'x', schema: { type: 'object' },
     })).resolves.toEqual({ ok: true });
+  });
+
+  it('fails when codex exits successfully without writing the last message', async () => {
+    const runner: CliRunner = async () => ({ stdout: 'progress logs', stderr: '', exitCode: 0 });
+
+    await expect(new CodexCliProvider({ runner }).generate({ model: 'gpt-5', prompt: 'x' })).rejects.toThrow(/no text/);
   });
 
   it('reports a login hint when codex fails', async () => {

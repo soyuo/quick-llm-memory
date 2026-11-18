@@ -158,6 +158,21 @@ describe('qlm build command', () => {
     ]);
   });
 
+  it('builds with a provider that has no embeddings, such as the CLI subscription providers', async () => {
+    const { dataRoot } = createProject();
+    const sourcePath = createSourceFile();
+    const parsed = await new MarkdownDocumentParser().parse(loadMarkdownSources(sourcePath)[0]!);
+    const hierarchy = createHierarchy(parsed.sections.map(({ id }) => id));
+    const settings = settingsSchema.parse({ ai: { provider: 'codex-cli', model: 'test-model' } });
+    const provider = new FakeBuildProvider(hierarchy);
+    (provider as unknown as { embed?: unknown }).embed = undefined;
+
+    const result = await runBuild(dataRoot, sourcePath, { settings, providerFactory: () => provider });
+
+    expect(result.errorOutput).toBe('');
+    expect(result.exitCode).toBe(0);
+  });
+
   it('honors the setting that disables response caching for sensitive sources', async () => {
     const { dataRoot } = createProject();
     const sourcePath = createSourceFile();

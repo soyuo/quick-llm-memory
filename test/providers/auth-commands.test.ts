@@ -42,7 +42,7 @@ describe('qlm auth', () => {
     const result = await run(runner, 'status');
 
     expect(result.out).toContain('codex: Logged in using ChatGPT');
-    expect(result.out).toContain('claude: claude CLI not found on PATH');
+    expect(result.out).toContain('claude: ENOENT');
   });
 
   it('fails when the vendor login does not complete', async () => {

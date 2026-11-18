@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { ProviderError } from './provider-error.js';
 
 export interface CliRunOptions {
@@ -22,8 +22,9 @@ export type CliRunner = (
   options?: CliRunOptions,
 ) => Promise<CliRunResult>;
 
-const SAFE_WINDOWS_ARG = /^[A-Za-z0-9_.:\\/@=+, -]*$/;
-const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
+// Only fixed flags, model names, and relative file names reach argv; prompts use stdin.
+const SAFE_WINDOWS_ARG = /^[A-Za-z0-9_.:/@=+,-]*$/;
+const MAX_OUTPUT_CHARS = 8 * 1024 * 1024;
 
 /**
  * Runs a vendor CLI without a shell. On Windows npm installs `.cmd` shims, which
@@ -32,9 +33,10 @@ const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
  */
 export const runCli: CliRunner = (command, args, options = {}) =>
   new Promise((resolve, reject) => {
+    const windows = process.platform === 'win32';
     let file = command;
     let fileArgs = [...args];
-    if (process.platform === 'win32') {
+    if (windows) {
       if (!SAFE_WINDOWS_ARG.test(command) || args.some((arg) => !SAFE_WINDOWS_ARG.test(arg))) {
         reject(new ProviderError('A CLI argument contains characters that are not allowed.'));
         return;
@@ -45,24 +47,38 @@ export const runCli: CliRunner = (command, args, options = {}) =>
 
     const child = spawn(file, fileArgs, {
       shell: false,
-      windowsVerbatimArguments: process.platform === 'win32',
+      windowsVerbatimArguments: windows,
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
       stdio: options.inherit ? 'inherit' : ['pipe', 'pipe', 'pipe'],
-      ...(options.signal === undefined ? {} : { signal: options.signal }),
-      ...(options.timeoutMs === undefined ? {} : { timeout: options.timeoutMs }),
     });
 
     let stdout = '';
     let stderr = '';
-    const collect = (current: string, chunk: Buffer): string =>
-      current.length > MAX_OUTPUT_BYTES ? current : current + chunk.toString('utf8');
-    child.stdout?.on('data', (chunk: Buffer) => { stdout = collect(stdout, chunk); });
-    child.stderr?.on('data', (chunk: Buffer) => { stderr = collect(stderr, chunk); });
+    let timedOut = false;
+    let aborted = false;
+    const collect = (current: string, chunk: string): string =>
+      current.length >= MAX_OUTPUT_CHARS ? current : current + chunk;
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk: string) => { stdout = collect(stdout, chunk); });
+    child.stderr?.on('data', (chunk: string) => { stderr = collect(stderr, chunk); });
+
+    const timer = options.timeoutMs === undefined
+      ? undefined
+      : setTimeout(() => { timedOut = true; killTree(child); }, options.timeoutMs);
+    const onAbort = (): void => { aborted = true; killTree(child); };
+    if (options.signal?.aborted) {
+      onAbort();
+    } else {
+      options.signal?.addEventListener('abort', onAbort, { once: true });
+    }
+    const cleanup = (): void => {
+      if (timer !== undefined) clearTimeout(timer);
+      options.signal?.removeEventListener('abort', onAbort);
+    };
+
     child.once('error', (error: NodeJS.ErrnoException) => {
-      if (error.name === 'AbortError') {
-        reject(error);
-        return;
-      }
+      cleanup();
       reject(new ProviderError(
         error.code === 'ENOENT'
           ? `The ${command} command was not found. Install it and make sure it is on PATH.`
@@ -70,9 +86,30 @@ export const runCli: CliRunner = (command, args, options = {}) =>
         { cause: error },
       ));
     });
-    child.once('close', (exitCode) => resolve({ stdout, stderr, exitCode }));
+    child.once('close', (exitCode) => {
+      cleanup();
+      if (aborted) {
+        const error = new Error('The operation was aborted.');
+        error.name = 'AbortError';
+        reject(error);
+      } else if (timedOut) {
+        reject(new ProviderError(`The ${command} command timed out after ${options.timeoutMs} ms.`));
+      } else {
+        resolve({ stdout, stderr, exitCode });
+      }
+    });
     if (!options.inherit) {
       child.stdin?.on('error', () => undefined);
       child.stdin?.end(options.input ?? '');
     }
   });
+
+/** On Windows, cmd.exe wraps the real CLI, so the whole tree must be stopped. */
+function killTree(child: ChildProcess): void {
+  if (process.platform === 'win32' && child.pid !== undefined) {
+    spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', shell: false })
+      .once('error', () => child.kill());
+    return;
+  }
+  child.kill();
+}

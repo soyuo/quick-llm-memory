@@ -92,12 +92,11 @@ export class CodexCliProvider extends CliProvider {
       const outputFile = join(directory, 'last-message.txt');
       const args = [
         'exec', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only',
-        '-C', directory, '-m', request.model, '-o', outputFile,
+        '-C', '.', '-m', request.model, '-o', 'last-message.txt',
       ];
       if (schema !== undefined) {
-        const schemaFile = join(directory, 'schema.json');
-        await writeFile(schemaFile, JSON.stringify(schema), 'utf8');
-        args.push('--output-schema', schemaFile);
+        await writeFile(join(directory, 'schema.json'), JSON.stringify(schema), 'utf8');
+        args.push('--output-schema', 'schema.json');
       }
       args.push('-');
       const prompt = request.systemPrompt === undefined
@@ -110,11 +109,11 @@ export class CodexCliProvider extends CliProvider {
         ...(request.signal === undefined ? {} : { signal: request.signal }),
       });
       if (result.exitCode !== 0) throw this.failure(result.stderr, result.exitCode);
-      const text = (await readFile(outputFile, 'utf8').catch(() => result.stdout)).trim();
+      const text = (await readFile(outputFile, 'utf8').catch(() => '')).trim();
       if (text.length === 0) throw new ProviderError('Provider returned no text completion.');
       return { text };
     } finally {
-      await rm(directory, { recursive: true, force: true });
+      await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => undefined);
     }
   }
 }
@@ -134,15 +133,22 @@ export class ClaudeCodeProvider extends CliProvider {
         : `Respond with only a JSON value matching this JSON Schema, with no prose or code fences:\n${JSON.stringify(schema)}`,
     ].filter((part): part is string => part !== undefined).join('\n\n');
     const prompt = system.length === 0 ? request.prompt : `${system}\n\n${request.prompt}`;
-    const result = await this.runner(
+    const directory = await mkdtemp(join(tmpdir(), 'qlm-claude-'));
+    let result;
+    try {
+    result = await this.runner(
       this.command,
       ['-p', '--output-format', 'json', '--no-session-persistence', '--tools', '', '--model', request.model],
       {
         input: prompt,
+        cwd: directory,
         timeoutMs: this.timeoutMs,
         ...(request.signal === undefined ? {} : { signal: request.signal }),
       },
     );
+    } finally {
+      await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => undefined);
+    }
     if (result.exitCode !== 0) throw this.failure(result.stderr, result.exitCode);
     let payload: unknown;
     try {

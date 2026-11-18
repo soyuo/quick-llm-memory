@@ -74,8 +74,8 @@ export function registerAuthCommands(cli: Command, options: AuthCommandOptions =
           const result = await run(definition.command, definition.status);
           const detail = (result.stdout || result.stderr).trim().split(/\r?\n/u)[0] ?? '';
           writeOut(`${target}: ${result.exitCode === 0 ? detail || 'logged in' : `not logged in${detail ? ` (${detail})` : ''}`}\n`);
-        } catch {
-          writeOut(`${target}: ${definition.command} CLI not found on PATH\n`);
+        } catch (error) {
+          writeOut(`${target}: ${error instanceof Error ? error.message : `${definition.command} CLI unavailable`}\n`);
         }
       }
     });

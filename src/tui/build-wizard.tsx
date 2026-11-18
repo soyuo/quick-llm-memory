@@ -21,7 +21,7 @@ import {
 } from '../knowledge/builder.js';
 import { loadMarkdownSources } from '../knowledge/source.js';
 import { createConfiguredBuildProvider } from '../providers/configured-build-provider.js';
-import type { AIProvider } from '../providers/provider.js';
+import { isEmbeddingProvider, type AIProvider } from '../providers/provider.js';
 import { listProjects } from '../projects/manager.js';
 import { projectNameSchema } from '../projects/schema.js';
 import { sanitizeTerminalText } from './terminal-text.js';
@@ -247,7 +247,9 @@ export function BuildWizard({
         project,
         provider,
         model: draft.model,
-        embeddingModel: settings.ai?.embedding_model ?? 'text-embedding-3-small',
+        ...(isEmbeddingProvider(provider)
+          ? { embeddingModel: settings.ai?.embedding_model ?? 'text-embedding-3-small' }
+          : {}),
         hierarchySettings: {
           minDepth: Number(draft.minDepth),
           maxDepth: Number(draft.maxDepth),
