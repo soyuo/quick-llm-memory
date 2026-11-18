@@ -6,7 +6,7 @@ import { InputError } from '../errors/qlm-error.js';
 import { validateProjectName } from './schema.js';
 
 export interface SnapshotFile { path: string; size: number; sha256: string }
-export interface SnapshotManifest { version: 1; id: string; projectId: string; projectName: string; createdAt: string; files: SnapshotFile[] }
+export interface SnapshotManifest { version: 1; id: string; projectId: string; projectName: string; createdAt: string; operation?: string; reason?: string; files: SnapshotFile[] }
 const hash = (data: Buffer) => createHash('sha256').update(data).digest('hex');
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 function assertProjectId(projectId: string): void {
@@ -41,7 +41,7 @@ function collect(root: string, dir = root): SnapshotFile[] {
   return files.sort((a, b) => a.path.localeCompare(b.path));
 }
 
-export function createProjectSnapshot(dataRoot: string, projectId: string, projectName: string): SnapshotManifest {
+export function createProjectSnapshot(dataRoot: string, projectId: string, projectName: string, context: { operation?: string; reason?: string } = {}): SnapshotManifest {
   assertProjectId(projectId);
   validateProjectName(projectName);
   const root = realpathSync(resolve(dataRoot));
@@ -68,7 +68,7 @@ export function createProjectSnapshot(dataRoot: string, projectId: string, proje
       if (hash(bytes) !== file.sha256) throw new InputError('Snapshot source changed during copy.');
       writeFileSync(target, bytes, { flag: 'wx' });
     }
-    const manifest: SnapshotManifest = { version: 1, id, projectId, projectName, createdAt: new Date().toISOString(), files };
+    const manifest: SnapshotManifest = { version: 1, id, projectId, projectName, createdAt: new Date().toISOString(), ...context, files };
     writeFileSync(join(stage, 'manifest.json'), JSON.stringify(manifest, null, 2), { flag: 'wx' });
     renameSync(stage, join(snapshots, id));
     return manifest;

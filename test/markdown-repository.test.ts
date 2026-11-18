@@ -1,4 +1,4 @@
-import {
+﻿import {
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -13,10 +13,12 @@ import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ConfigurationError } from '../src/config/error.js';
 import { InputError, InternalError } from '../src/errors/qlm-error.js';
+import { initializeProject } from '../src/projects/manager.js';
+import { listProjectSnapshots } from '../src/projects/snapshots.js';
 import {
   createMarkdownDocument,
   moveMarkdownDocument,
@@ -27,6 +29,7 @@ import {
 } from '../src/markdown/repository.js';
 
 const temporaryDirectories: string[] = [];
+const snapshotContexts = new Map<string, { dataRoot: string; projectId: string; projectName: string }>();
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
@@ -129,6 +132,7 @@ describe('Markdown document repository', () => {
       knowledgeRoot,
       'security/authentication.md',
       'identity/authentication.md',
+      snapshotContexts.get(knowledgeRoot)!,
     );
 
     expect(moved.metadata.id).toBe(created.metadata.id);
@@ -137,6 +141,20 @@ describe('Markdown document repository', () => {
     );
     expect(readFileSync(moved.sourcePath)).toEqual(originalContents);
     expect(existsSync(created.sourcePath)).toBe(false);
+    const context = snapshotContexts.get(knowledgeRoot)!;
+    expect(listProjectSnapshots(context.dataRoot, context.projectId)[0]?.operation).toBe('markdown-move');
+  });
+
+  it('does not move a document when its pre-move snapshot fails', () => {
+    const knowledgeRoot = createKnowledgeRoot();
+    const created = createMarkdownDocument(knowledgeRoot, 'source.md', createDraft());
+    const contents = readFileSync(created.sourcePath, 'utf8');
+    const context = snapshotContexts.get(knowledgeRoot)!;
+    writeFileSync(join(context.dataRoot, 'snapshots'), 'blocking file');
+
+    expect(() => moveMarkdownDocument(knowledgeRoot, 'source.md', 'target.md', context)).toThrow();
+    expect(readFileSync(created.sourcePath, 'utf8')).toBe(contents);
+    expect(existsSync(join(knowledgeRoot, 'target.md'))).toBe(false);
   });
 
   it('restores a source that changes while a move is in progress', () => {
@@ -173,6 +191,7 @@ describe('Markdown document repository', () => {
           knowledgeRoot,
           'security/authentication.md',
           'identity/authentication.md',
+          snapshotContexts.get(knowledgeRoot)!,
         ),
       ).toThrow(InternalError);
       expect(readFileSync(created.sourcePath, 'utf8')).toBe(changedContents);
@@ -250,7 +269,7 @@ describe('Markdown document repository', () => {
       createMarkdownDocument(knowledgeRoot, 'destination.md', createDraft()),
     ).toThrow(InputError);
     expect(() =>
-      moveMarkdownDocument(knowledgeRoot, 'source.md', 'destination.md'),
+      moveMarkdownDocument(knowledgeRoot, 'source.md', 'destination.md', snapshotContexts.get(knowledgeRoot)!),
     ).toThrow(InputError);
     expect(readFileSync(source.sourcePath, 'utf8')).toBe(sourceContents);
     expect(readFileSync(destination.sourcePath, 'utf8')).toBe(destinationContents);
@@ -312,11 +331,12 @@ describe('Markdown document repository', () => {
 });
 
 function createKnowledgeRoot(): string {
-  const directory = realpathSync(
-    mkdtempSync(join(tmpdir(), 'qlm-markdown-repository-')),
-  );
-  temporaryDirectories.push(directory);
-  return join(directory, 'knowledge');
+  const dataRoot = realpathSync(mkdtempSync(join(tmpdir(), 'qlm-markdown-repository-')));
+  temporaryDirectories.push(dataRoot);
+  const project = initializeProject(dataRoot, 'markdown-test');
+  const knowledgeRoot = join(dataRoot, 'projects', project.name, 'knowledge');
+  snapshotContexts.set(knowledgeRoot, { dataRoot, projectId: project.id, projectName: project.name });
+  return knowledgeRoot;
 }
 
 function createDraft(

@@ -1,6 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import {
   readProjectSourceSnapshotReadOnly,
   replaceProjectSourceSnapshot,
@@ -21,6 +21,7 @@ import {
 } from './atomic-commit.js';
 import { assertValidGeneratedDocuments } from './generated-document-validator.js';
 import { assertValidKnowledgeHierarchy } from './hierarchy-validator.js';
+import { createProjectSnapshot } from '../projects/snapshots.js';
 import { MarkdownDocumentParser } from './markdown-parser.js';
 import {
   generateMarkdownDocument,
@@ -526,6 +527,13 @@ export async function executePreparedKnowledgeBuild(
     }
 
     emit({ stage: 'committing' });
+    if (committedCandidates.length > 0) {
+      const dataRoot = resolve(options.projectRoot, '..', '..');
+      createProjectSnapshot(dataRoot, options.project.id, options.project.name, {
+        operation: 'knowledge-build',
+        reason: incremental ? 'incremental-regeneration' : 'full-regeneration',
+      });
+    }
     ensureNotCancelled();
     canCancel = false;
     const commit = incremental && committedCandidates.length > 0

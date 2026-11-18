@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { ConfigurationError } from '../config/error.js';
+import { createProjectSnapshot } from './snapshots.js';
 import { InputError, InternalError } from '../errors/qlm-error.js';
 import {
   projectMetadataSchema,
@@ -208,6 +209,11 @@ export function renameProject(
     });
   }
 
+  createProjectSnapshot(dataRoot, project.id, project.name, {
+    operation: 'project-rename',
+    reason: `rename:${sourceName}->${targetName}`,
+  });
+
   try {
     renameSync(sourceDirectory, targetDirectory);
   } catch (error) {
@@ -275,7 +281,11 @@ export function deleteProject(
       suggestedAction: `Type ${projectName} exactly to confirm deletion.`,
     });
   }
-  requireProject(dataRoot, projectName);
+  const project = requireProject(dataRoot, projectName);
+  createProjectSnapshot(dataRoot, project.id, project.name, {
+    operation: 'project-delete',
+    reason: 'confirmed-project-deletion',
+  });
   const projectDirectory = join(dataRoot, PROJECTS_DIRECTORY, projectName);
   try {
     rmSync(projectDirectory, { recursive: true });
