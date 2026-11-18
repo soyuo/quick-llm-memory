@@ -10,6 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,6 +22,7 @@ import {
   moveMarkdownDocument,
   readStoredMarkdownDocument,
   saveMarkdownDocument,
+  saveMarkdownDocumentIfUnchanged,
   type MarkdownDocumentDraft,
 } from '../src/markdown/repository.js';
 
@@ -80,6 +82,25 @@ describe('Markdown document repository', () => {
     expect(saved.metadata.id).toBe(created.metadata.id);
     expect(saved.metadata.title).toBe('Updated title');
     expect(saved.body).toBe(updatedDraft.body);
+  });
+
+  it('rejects a stale reviewed source without overwriting newer edits', () => {
+    const knowledgeRoot = createKnowledgeRoot();
+    const created = createMarkdownDocument(knowledgeRoot, 'notes/reviewed.md', createDraft());
+    const sourcePath = join(knowledgeRoot, 'notes', 'reviewed.md');
+    const reviewedSource = readFileSync(sourcePath, 'utf8');
+    const reviewedHash = createHash('sha256').update(reviewedSource, 'utf8').digest('hex');
+    const newerSource = `${reviewedSource}\nUser edit after review.\n`;
+    writeFileSync(sourcePath, newerSource);
+
+    expect(() => saveMarkdownDocumentIfUnchanged(
+      knowledgeRoot,
+      'notes/reviewed.md',
+      createDraft({ title: 'Approved update', body: 'Approved body' }),
+      reviewedHash,
+    )).toThrow(InputError);
+    expect(readFileSync(sourcePath, 'utf8')).toBe(newerSource);
+    expect(created.metadata.title).not.toBe('Approved update');
   });
 
   it('creates a new document when saving to a path that does not exist', () => {

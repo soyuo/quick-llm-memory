@@ -75,3 +75,23 @@ mcp:
     - SEARCH
     - METADATA
 ```
+
+### Document write proposals
+
+With `PROPOSE_WRITE`, `memory_propose_document_update` stores a size-limited
+proposal bound to the project ID, document path, and SHA-256 of the current
+Markdown. It returns a bounded diff and does not change Markdown or the search
+index. Proposal records are stored under the configured data directory.
+
+Applying a proposal is a separate local action: run `qlm mcp approve <proposal-id>`
+in an interactive terminal and type `yes` after reviewing the proposal identity.
+The command requires `APPROVED_WRITE`, checks that the project and source hash
+still match, applies the update, and rebuilds the project index. Any other answer
+cancels without changing the document. A stale proposal must be recreated after
+the document is edited. The source is checked again immediately before the
+atomic replacement, and a failed index rebuild restores the prior source only
+if the file still matches the version written by that approval. Keep external
+editors from changing the same file during the final approval operation; portable
+filesystem rename APIs do not provide a content-hash compare-and-swap primitive.
+To discard a pending proposal without applying it, run
+`qlm mcp cancel <proposal-id>`.

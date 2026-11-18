@@ -17,6 +17,7 @@ import { runCli } from '../src/cli.js';
 import { serveMcpHttp } from '../src/mcp/http-server.js';
 import { mcpRequestSignal, serveMcpStdio } from '../src/mcp/server.js';
 import { initializeProject } from '../src/projects/manager.js';
+import { createKnowledgeRoot, createMarkdownDocument } from '../src/markdown/repository.js';
 
 describe('MCP server bootstrap', () => {
   it('enforces restricted permissions over stdio and HTTP transports', async () => {
@@ -60,6 +61,43 @@ describe('MCP server bootstrap', () => {
     } finally {
       await client.close();
       await handle.close();
+    }
+  });
+
+  it('allows proposal permission without mutating Markdown or the index', async () => {
+    const dataRoot = mkdtempSync(join(tmpdir(), 'qlm-mcp-proposal-'));
+    const project = initializeProject(dataRoot, 'proposal-project');
+    const knowledgeRoot = createKnowledgeRoot(join(dataRoot, 'projects', project.name, 'knowledge'));
+    createMarkdownDocument(knowledgeRoot, 'notes.md', {
+      metadata: { schema_version: 1, title: 'Notes', type: 'document', status: 'active', depth: 1 },
+      body: '\nOriginal text\n',
+    });
+    const sourcePath = join(knowledgeRoot, 'notes.md');
+    const before = readFileSync(sourcePath, 'utf8');
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const handle = serveMcpStdio({ serverOptions: {
+      dataRoot,
+      permissions: new Set(['READ', 'PROPOSE_WRITE']),
+    }, transport: serverTransport });
+    const client = new Client({ name: 'qlm-proposal-test', version: '1.0.0' });
+    try {
+      await client.connect(clientTransport);
+      const result = await client.callTool({
+        name: 'memory_propose_document_update',
+        arguments: {
+          project: project.name,
+          path: 'notes.md',
+          metadata: { schema_version: 1, title: 'Proposed notes', type: 'document', status: 'active', depth: 1 },
+          body: '\nProposed text\n',
+        },
+      });
+      expect(result.isError).not.toBe(true);
+      expect(JSON.stringify(result)).toContain('Proposed text');
+      expect(readFileSync(sourcePath, 'utf8')).toBe(before);
+    } finally {
+      await client.close().catch(() => {});
+      await handle.close();
+      rmSync(dataRoot, { recursive: true, force: true });
     }
   });
 

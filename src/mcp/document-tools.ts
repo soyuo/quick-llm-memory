@@ -2,6 +2,9 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { InputError } from '../errors/qlm-error.js';
 import { assertMcpOperationAllowed, readMcpProjectDocument, resolveMcpProjectScope } from './access.js';
+import { readStoredMarkdownDocument } from '../markdown/repository.js';
+import { documentDraftFrontmatterSchema } from '../markdown/schema.js';
+import { createStoredDocumentProposal } from './proposal-store.js';
 import type { RegisterMcpToolsOptions } from './tools.js';
 
 const DEFAULT_READ_MANY_MAX_TOKENS = 4000;
@@ -18,6 +21,49 @@ export function registerMcpDocumentTools(
   server: McpServer,
   options: RegisterMcpToolsOptions,
 ): void {
+  server.registerTool(
+    'memory_propose_document_update',
+    {
+      description: 'Create a bounded, non-mutating Markdown update proposal for local review.',
+      inputSchema: z.object({
+        project: z.string().min(1).max(64),
+        path: z.string().min(1).max(512),
+        metadata: z.record(z.string(), z.unknown()),
+        body: z.string().max(256 * 1024),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    ({ project, path, metadata, body }) => {
+      assertMcpOperationAllowed('PROPOSE_WRITE');
+      try {
+        const scope = resolveMcpProjectScope(options.dataRoot, project);
+        const existing = readStoredMarkdownDocument(scope.knowledgeRoot, path);
+        const draft = { metadata: documentDraftFrontmatterSchema.parse(metadata), body };
+        const proposal = createStoredDocumentProposal({
+          dataRoot: options.dataRoot,
+          projectRoot: scope.projectRoot,
+          knowledgeRoot: scope.knowledgeRoot,
+          documentPath: path,
+          draft,
+        });
+        const diff = boundedDiff(
+          `metadata\n${JSON.stringify(existing.metadata, null, 2)}\nbody\n${existing.body}`,
+          `metadata\n${JSON.stringify(draft.metadata, null, 2)}\nbody\n${body}`,
+        );
+        return structuredResult({
+          proposalId: proposal.id,
+          project: proposal.projectName,
+          path: proposal.documentPath,
+          sourceHash: proposal.sourceHash,
+          diff,
+          truncated: diff.endsWith('[diff truncated]'),
+        });
+      } catch (error) {
+        return safeError(error);
+      }
+    },
+  );
+
   server.registerTool(
     'memory_read',
     {
@@ -128,6 +174,12 @@ export function registerMcpDocumentTools(
       }
     },
   );
+}
+
+function boundedDiff(before: string, after: string): string {
+  const maxCharacters = 8_000;
+  const diff = `--- current\n${before}\n+++ proposed\n${after}`;
+  return diff.length <= maxCharacters ? diff : `${diff.slice(0, maxCharacters)}\n[diff truncated]`;
 }
 
 function estimateReadManyTokens(

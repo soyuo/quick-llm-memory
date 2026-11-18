@@ -83,10 +83,11 @@ describe('MCP read-only project tools', () => {
       const { tools } = await client.listTools();
       expect(tools.map((tool) => tool.name).sort()).toEqual([
         'memory_get_context', 'memory_get_metadata', 'memory_get_related',
-        'memory_get_tree', 'memory_list_projects', 'memory_read', 'memory_read_many',
-        'memory_search', 'memory_validate',
+        'memory_get_tree', 'memory_list_projects', 'memory_propose_document_update',
+        'memory_read', 'memory_read_many', 'memory_search', 'memory_validate',
       ]);
-      expect(tools.every((tool) => tool.annotations?.readOnlyHint === true)).toBe(true);
+      expect(tools.filter((tool) => tool.name !== 'memory_propose_document_update').every((tool) => tool.annotations?.readOnlyHint === true)).toBe(true);
+      expect(tools.find((tool) => tool.name === 'memory_propose_document_update')?.annotations?.readOnlyHint).toBe(false);
       const tree = tools.find((tool) => tool.name === 'memory_get_tree');
       expect(tree?.inputSchema.properties).toHaveProperty('maxDepth');
       expect(tree?.inputSchema.properties).toMatchObject({ maxEntries: { maximum: 500 } });

@@ -4,12 +4,14 @@ import {
   linkSync,
   lstatSync,
   openSync,
+  readFileSync,
   renameSync,
   statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { dirname, join, relative, sep } from 'node:path';
 import { ConfigurationError } from '../config/error.js';
 import { InputError } from '../errors/qlm-error.js';
@@ -86,6 +88,7 @@ export function writeNewFileAtomically(
 export function writeFileAtomicallyReplacing(
   filePath: string,
   contents: string,
+  expectedCurrentHash?: string,
 ): void {
   const temporaryPath = join(dirname(filePath), `.qlm-${randomUUID()}.tmp`);
   let descriptor: number | undefined;
@@ -96,6 +99,12 @@ export function writeFileAtomicallyReplacing(
     fsyncSync(descriptor);
     closeSync(descriptor);
     descriptor = undefined;
+    if (expectedCurrentHash !== undefined) {
+      const actualHash = createHash('sha256').update(readFileSync(filePath)).digest('hex');
+      if (actualHash !== expectedCurrentHash) {
+        throw new InputError('The document changed during approval; the newer version was preserved.');
+      }
+    }
     renameSync(temporaryPath, filePath);
   } catch (cause) {
     if (descriptor !== undefined) {
