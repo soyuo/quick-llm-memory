@@ -7,7 +7,7 @@ import { loadSettings } from '../config/settings.js';
 import { resolveSettingsPaths } from '../config/paths.js';
 import { InputError } from '../errors/qlm-error.js';
 import type { Settings } from '../config/schema.js';
-import { createProjectSnapshot, listProjectFilePaths, listProjectSnapshots, restoreProjectSnapshot } from './snapshots.js';
+import { createProjectSnapshot, listProjectFilePaths, listProjectSnapshots, recoverInterruptedProjectRestore, restoreProjectSnapshot } from './snapshots.js';
 import { rebuildProjectIndex, rebuildProjectIndexWithEmbeddings } from '../database/reindex.js';
 import {
   createApplicationLogger,
@@ -81,6 +81,7 @@ export function registerProjectCommands(
     .option('--yes', 'confirm replacing project files')
     .action(async (projectName: string, snapshotId: string, restoreOptions: { yes?: boolean }) => {
     await withProjectRuntime(runtimeFactory, async ({ dataRoot }) => {
+      recoverInterruptedProjectRestore(dataRoot, validateProjectName(projectName));
       const project = listProjects(dataRoot).find(({ name }) => name === validateProjectName(projectName));
       if (!project) throw new InputError(`Project not found: ${projectName}`);
       const target = listProjectSnapshots(dataRoot, project.id).find(({ id }) => id === snapshotId);
