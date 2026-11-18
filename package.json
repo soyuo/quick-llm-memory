@@ -13,6 +13,7 @@
     "test": "vitest run",
     "test:retrieval-quality": "vitest run test/retrieval-quality.test.ts",
     "verify:mcp": "npm run build && node scripts/verify-mcp.mjs",
+    "package:standalone": "node scripts/package-standalone.mjs",
     "install": "node-gyp rebuild"
   },
   "devDependencies": {
