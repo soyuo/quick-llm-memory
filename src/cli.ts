@@ -1,5 +1,6 @@
 import { Command, CommanderError } from 'commander';
 import { InternalError, QLMError } from './errors/qlm-error.js';
+import { HierarchyValidationError } from './knowledge/hierarchy-validator.js';
 import { packageMetadata } from './package-metadata.js';
 import {
   registerProjectCommands,
@@ -78,6 +79,8 @@ export async function runCli(
   }
 }
 
+const MAX_SHOWN_DIAGNOSTICS = 20;
+
 export function reportCliError(
   error: unknown,
   writeError: (text: string) => void = (text) => process.stderr.write(text),
@@ -90,6 +93,14 @@ export function reportCliError(
           suggestedAction: 'Run `qlm --help` for command usage.',
         });
   const lines = [`Error [${qlmError.code}]: ${qlmError.message}`];
+
+  if (qlmError instanceof HierarchyValidationError) {
+    const shown = qlmError.diagnostics.slice(0, MAX_SHOWN_DIAGNOSTICS);
+    lines.push(...shown.map(({ code, path, message }) => `  - [${code}] ${path}: ${message}`));
+    if (qlmError.diagnostics.length > shown.length) {
+      lines.push(`  ... and ${qlmError.diagnostics.length - shown.length} more`);
+    }
+  }
 
   if (qlmError.suggestedAction !== undefined) {
     lines.push(`Action: ${qlmError.suggestedAction}`);

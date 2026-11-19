@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { reportCliError, runCli } from '../../src/cli.js';
 import { ConfigurationError } from '../../src/config/error.js';
+import { HierarchyValidationError } from '../../src/knowledge/hierarchy-validator.js';
 import { InputError, QLM_ERROR_CODES } from '../../src/errors/qlm-error.js';
 
 const { version } = JSON.parse(
@@ -75,6 +76,23 @@ describe('CLI', () => {
     expect(output.join('')).toContain(`[${QLM_ERROR_CODES.configuration}]`);
     expect(output.join('')).toContain('Invalid logging level.');
     expect(output.join('')).toContain('Action: Choose a supported logging level.');
+  });
+
+  it('lists hierarchy validation diagnostics, capped, before the action', () => {
+    const output: string[] = [];
+    const diagnostics = Array.from({ length: 22 }, (_, index) => ({
+      code: 'unknown_source_section' as const,
+      path: `/${index}/source_sections/0`,
+      message: `Unknown section ${index}.`,
+    }));
+
+    reportCliError(new HierarchyValidationError(diagnostics), (text) => output.push(text));
+
+    const text = output.join('');
+    expect(text).toContain('[unknown_source_section] /0/source_sections/0: Unknown section 0.');
+    expect(text).toContain('... and 2 more');
+    expect(text).not.toContain('Unknown section 21.');
+    expect(text.indexOf('... and 2 more')).toBeLessThan(text.indexOf('Action:'));
   });
 
   it('formats unexpected errors without exposing their internal message', () => {
