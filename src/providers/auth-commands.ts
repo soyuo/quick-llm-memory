@@ -114,6 +114,9 @@ export function formatStatus(stdout: string, stderr: string, exitCode: number | 
   } catch {
     // Plain-text status output is handled below.
   }
-  const detail = (stdout || stderr).trim().split(/\r?\n/u)[0] ?? '';
+  const firstLine = (stdout || stderr).trim().split(/\r?\n/u)[0] ?? '';
+  const detail = /^[{[\s"]/u.test(firstLine)
+    ? ''
+    : firstLine.replace(/\S+@\S+/gu, '[redacted]').slice(0, 80);
   return exitCode === 0 ? detail || 'logged in' : `not logged in${detail ? ` (${detail})` : ''}`;
 }
