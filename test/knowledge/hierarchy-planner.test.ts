@@ -5,6 +5,7 @@ import {
   HIERARCHY_PLANNER_SCHEMA,
   normalizeHierarchyPaths,
   planKnowledgeHierarchy,
+  repairHierarchyReferences,
   type HierarchyNode,
   type HierarchyPlannerResponse,
 } from '../../src/knowledge/planner.js';
@@ -89,7 +90,11 @@ describe('planKnowledgeHierarchy', () => {
       model: 'planner-model',
     });
 
-    expect(result).toEqual(hierarchy);
+    // The fixture's related ID does not exist, so repair drops it; everything else is unchanged.
+    expect(result).toEqual([{
+      ...hierarchy[0]!,
+      children: [{ ...hierarchy[0]!.children![0]!, relatedDocumentIds: [] }],
+    }]);
     expect(provider.requests).toHaveLength(1);
     expect(provider.requests[0]).toMatchObject({
       model: 'planner-model',
@@ -210,5 +215,54 @@ describe('hierarchy path normalization', () => {
 
   it('tells the model how to build paths', () => {
     expect(createHierarchyPlannerPrompt([section])).toContain('security/vm/create.md');
+  });
+});
+
+describe('hierarchy reference repair', () => {
+  const doc = (id: string, sections: string[], related: string[] = []): HierarchyNode => ({
+    id,
+    name: id,
+    type: 'document',
+    path: `cat/${id}.md`,
+    description: 'd',
+    sourceSectionIds: sections,
+    relatedDocumentIds: related,
+    children: [],
+  });
+  const category = (children: HierarchyNode[]): HierarchyNode => ({
+    id: 'cat',
+    name: 'Cat',
+    type: 'category',
+    path: 'cat',
+    description: 'c',
+    sourceSectionIds: [],
+    relatedDocumentIds: [],
+    children,
+  });
+
+  it('keeps a duplicated section in the first document only and drops invalid related IDs', () => {
+    const [root] = repairHierarchyReferences([category([
+      doc('a', ['s1', 's2', 's1'], ['b', 'ghost', 'a', 'b']),
+      doc('b', ['s2', 's3'], ['a']),
+    ])]);
+
+    const [a, b] = root!.children!;
+    expect(a?.sourceSectionIds).toEqual(['s1', 's2']);
+    expect(a?.relatedDocumentIds).toEqual(['b']);
+    expect(b?.sourceSectionIds).toEqual(['s3']);
+    expect(b?.relatedDocumentIds).toEqual(['a']);
+  });
+
+  it('does not empty a document; validation still reports a conflict it cannot repair', () => {
+    const [root] = repairHierarchyReferences([category([doc('a', ['s1']), doc('b', ['s1'])])]);
+
+    expect(root!.children![1]?.sourceSectionIds).toEqual(['s1']);
+  });
+
+  it('states the exactly-one-document rule and forbids invented related IDs', () => {
+    const prompt = createHierarchyPlannerPrompt([section]);
+
+    expect(prompt).toContain('exactly one document node');
+    expect(prompt).toContain('never invent an ID');
   });
 });

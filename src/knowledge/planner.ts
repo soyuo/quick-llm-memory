@@ -102,7 +102,45 @@ export async function planKnowledgeHierarchy(
     schemaName: 'qlm_knowledge_hierarchy',
     schema: HIERARCHY_PLANNER_SCHEMA,
   });
-  return normalizeHierarchyPaths(response.hierarchy);
+  return repairHierarchyReferences(normalizeHierarchyPaths(response.hierarchy));
+}
+
+/**
+ * Removes reference mistakes that cannot change the plan's meaning: a source section
+ * listed by a later document after an earlier one already claimed it, and related
+ * document IDs that are unknown, self-referencing, or repeated. A document that would
+ * lose all of its sections keeps them so validation reports the conflict.
+ */
+export function repairHierarchyReferences(nodes: readonly HierarchyNode[]): HierarchyNode[] {
+  const documentIds = new Set<string>();
+  const collect = (list: readonly HierarchyNode[]): void => {
+    for (const node of list) {
+      if (node.type === 'document') documentIds.add(node.id);
+      if (node.children !== undefined) collect(node.children);
+    }
+  };
+  collect(nodes);
+
+  const claimed = new Set<string>();
+  const repair = (list: readonly HierarchyNode[]): HierarchyNode[] =>
+    list.map((node) => {
+      const children = node.children === undefined ? undefined : repair(node.children);
+      if (node.type !== 'document') {
+        return { ...node, ...(children === undefined ? {} : { children }) };
+      }
+      const unique = [...new Set(node.sourceSectionIds)];
+      const unclaimed = unique.filter((id) => !claimed.has(id));
+      const sourceSectionIds = unclaimed.length > 0 ? unclaimed : unique;
+      for (const id of sourceSectionIds) claimed.add(id);
+      return {
+        ...node,
+        sourceSectionIds,
+        relatedDocumentIds: [...new Set(node.relatedDocumentIds)]
+          .filter((id) => id !== node.id && documentIds.has(id)),
+        ...(children === undefined ? {} : { children }),
+      };
+    });
+  return repair(nodes);
 }
 
 /**
@@ -161,7 +199,8 @@ export function createHierarchyPlannerPrompt(
     'Use portable relative paths with forward slashes; do not use absolute paths or parent traversal.',
     'Every node path is the full path from the hierarchy root, one segment per depth level: a node at depth N has exactly N segments, and a child path starts with its parent path followed by "/". Category paths have no extension; document paths end in ".md". Example: category "security" (depth 1), category "security/vm" (depth 2), document "security/vm/create.md" (depth 3).',
     'Build a genuine hierarchy: group related documents into several topic categories and nest subcategories when a category would hold more than about six documents. Do not put all documents under a single catch-all category, and do not create a category for fewer than two documents unless it clearly stands alone.',
-    'Map every supplied source section ID to at least one document node.',
+    'Map every supplied source section ID to exactly one document node: each section ID must appear in the sourceSectionIds of one document only, and every document needs at least one section.',
+    'relatedDocumentIds may only contain the "id" values of other document nodes that exist in this same hierarchy; never invent an ID.',
     'For each document node, set relatedDocumentIds to IDs of other related document nodes; use an empty array when there are none. Category nodes use an empty relatedDocumentIds array.',
     'Use concise descriptions that state each node purpose. Keep children as an empty array for leaf nodes.',
     ...depthInstructions,
