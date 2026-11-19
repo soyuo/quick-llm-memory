@@ -45,6 +45,36 @@ describe('qlm auth', () => {
     expect(result.out).toContain('claude: ENOENT');
   });
 
+  it('summarizes JSON status without exposing account details', async () => {
+    const runner: CliRunner = async () => ({
+      stdout: JSON.stringify({ loggedIn: true, authMethod: 'claude.ai', email: 'person@example.com', orgName: 'Secret Org' }, null, 2),
+      stderr: '',
+      exitCode: 0,
+    });
+
+    const result = await run(runner, 'status', 'claude');
+
+    expect(result.out).toBe('claude: logged in (claude.ai)\n');
+  });
+
+  it('redacts emails and hides JSON fragments in plain-text status output', async () => {
+    const withEmail: CliRunner = async () => ({ stdout: 'Logged in as person@example.com\n', stderr: '', exitCode: 0 });
+    const brokenJson: CliRunner = async () => ({ stdout: '{\n  "email": "person@example.com"\n', stderr: '', exitCode: 1 });
+
+    const first = await run(withEmail, 'status', 'codex');
+    const second = await run(brokenJson, 'status', 'claude');
+
+    expect(first.out).toBe('codex: Logged in as [redacted]\n');
+    expect(second.out).toBe('claude: not logged in\n');
+    expect(first.out + second.out).not.toContain('person@example.com');
+  });
+
+  it('reports a logged-out JSON status', async () => {
+    const runner: CliRunner = async () => ({ stdout: '{"loggedIn": false}', stderr: '', exitCode: 1 });
+
+    expect((await run(runner, 'status', 'claude')).out).toBe('claude: not logged in\n');
+  });
+
   it('fails when the vendor login does not complete', async () => {
     const runner: CliRunner = async () => ({ stdout: '', stderr: '', exitCode: 1 });
 

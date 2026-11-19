@@ -72,8 +72,7 @@ export function registerAuthCommands(cli: Command, options: AuthCommandOptions =
         const definition = TARGETS[target];
         try {
           const result = await run(definition.command, definition.status);
-          const detail = (result.stdout || result.stderr).trim().split(/\r?\n/u)[0] ?? '';
-          writeOut(`${target}: ${result.exitCode === 0 ? detail || 'logged in' : `not logged in${detail ? ` (${detail})` : ''}`}\n`);
+          writeOut(`${target}: ${formatStatus(result.stdout, result.stderr, result.exitCode)}\n`);
         } catch (error) {
           writeOut(`${target}: ${error instanceof Error ? error.message : `${definition.command} CLI unavailable`}\n`);
         }
@@ -101,4 +100,23 @@ function parseTarget(value: string): AuthTarget {
   throw new InputError(`Unsupported auth provider: ${value}.`, {
     suggestedAction: 'Use codex or claude.',
   });
+}
+
+/** Summarizes vendor status output without echoing account details such as email or organization. */
+export function formatStatus(stdout: string, stderr: string, exitCode: number | null): string {
+  try {
+    const parsed: unknown = JSON.parse(stdout);
+    if (typeof parsed === 'object' && parsed !== null && 'loggedIn' in parsed) {
+      const { loggedIn, authMethod } = parsed as { loggedIn: unknown; authMethod?: unknown };
+      const method = typeof authMethod === 'string' && /^[\w.-]{1,40}$/u.test(authMethod) ? ` (${authMethod})` : '';
+      return loggedIn === true ? `logged in${method}` : 'not logged in';
+    }
+  } catch {
+    // Plain-text status output is handled below.
+  }
+  const firstLine = (stdout || stderr).trim().split(/\r?\n/u)[0] ?? '';
+  const detail = /^[{[\s"]/u.test(firstLine)
+    ? ''
+    : firstLine.replace(/\S+@\S+/gu, '[redacted]').slice(0, 80);
+  return exitCode === 0 ? detail || 'logged in' : `not logged in${detail ? ` (${detail})` : ''}`;
 }
