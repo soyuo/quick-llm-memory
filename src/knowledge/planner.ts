@@ -160,6 +160,7 @@ export function createHierarchyPlannerPrompt(
     'Organize the supplied source sections into a hierarchy of category and document nodes.',
     'Use portable relative paths with forward slashes; do not use absolute paths or parent traversal.',
     'Every node path is the full path from the hierarchy root, one segment per depth level: a node at depth N has exactly N segments, and a child path starts with its parent path followed by "/". Category paths have no extension; document paths end in ".md". Example: category "security" (depth 1), category "security/vm" (depth 2), document "security/vm/create.md" (depth 3).',
+    'Build a genuine hierarchy: group related documents into several topic categories and nest subcategories when a category would hold more than about six documents. Do not put all documents under a single catch-all category, and do not create a category for fewer than two documents unless it clearly stands alone.',
     'Map every supplied source section ID to at least one document node.',
     'For each document node, set relatedDocumentIds to IDs of other related document nodes; use an empty array when there are none. Category nodes use an empty relatedDocumentIds array.',
     'Use concise descriptions that state each node purpose. Keep children as an empty array for leaf nodes.',

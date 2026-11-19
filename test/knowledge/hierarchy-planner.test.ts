@@ -204,6 +204,10 @@ describe('hierarchy path normalization', () => {
     expect(result.valid).toBe(true);
   });
 
+  it('asks for grouped categories instead of one catch-all category', () => {
+    expect(createHierarchyPlannerPrompt([section])).toContain('single catch-all category');
+  });
+
   it('tells the model how to build paths', () => {
     expect(createHierarchyPlannerPrompt([section])).toContain('security/vm/create.md');
   });

@@ -111,8 +111,14 @@ export function registerProjectCommands(
     .command('build <source>')
     .description('Build project knowledge from Markdown source')
     .requiredOption('--project <name>', 'Project to build')
-    .action(async (sourcePath: string, { project }: { project: string }) => {
+    .option('--depth <number>', 'Maximum hierarchy depth (default: 5)')
+    .option('--min-depth <number>', 'Minimum document depth (default: 1)')
+    .action(async (
+      sourcePath: string,
+      { project, depth, minDepth }: { project: string; depth?: string; minDepth?: string },
+    ) => {
       await withProjectRuntime(runtimeFactory, async ({ dataRoot, settings: runtimeSettings }) => {
+        const hierarchySettings = parseBuildDepths(depth, minDepth);
         const projectName = validateProjectName(project);
         const projectMetadata = listProjects(dataRoot).find(
           ({ name }) => name === projectName,
@@ -146,6 +152,7 @@ export function registerProjectCommands(
             provider,
             model,
             cacheGeneration: settings.ai?.cache_generation ?? true,
+            hierarchySettings,
             ...(isEmbeddingProvider(provider)
               ? { embeddingModel: settings.ai?.embedding_model ?? 'text-embedding-3-small' }
               : {}),
@@ -590,6 +597,32 @@ function parseOptionalLimit(value: string | undefined, description: string): num
     throw new InputError(`${description} must be a non-negative integer.`);
   }
   return limit;
+}
+
+function parseBuildDepths(
+  maxValue: string | undefined,
+  minValue: string | undefined,
+): { minDepth: number; maxDepth: number; autoDepth: boolean } {
+  const parse = (value: string | undefined, fallback: number, flag: string): number => {
+    if (value === undefined) {
+      return fallback;
+    }
+    const parsed = Number(value);
+    if (!/^\d+$/.test(value) || !Number.isSafeInteger(parsed) || parsed < 1 || parsed > 10) {
+      throw new InputError(`${flag} must be a whole number from 1 to 10.`, {
+        suggestedAction: `Use ${flag} with a value such as 3.`,
+      });
+    }
+    return parsed;
+  };
+  const maxDepth = parse(maxValue, 5, '--depth');
+  const minDepth = parse(minValue, 1, '--min-depth');
+  if (minDepth > maxDepth) {
+    throw new InputError('--min-depth must not exceed --depth.', {
+      suggestedAction: 'Lower --min-depth or raise --depth.',
+    });
+  }
+  return { minDepth, maxDepth, autoDepth: true };
 }
 
 function parseTreeDepth(value: string | undefined): number {

@@ -85,7 +85,7 @@ Run `qlm --help` for the complete syntax. Common commands:
 | Command | Purpose and example |
 | --- | --- |
 | `qlm init <name>` | Create a project. Example: `qlm init product-notes` |
-| `qlm build <source> --project <name>` | Generate or update project knowledge from source files. Example: `qlm build ./docs --project product-notes` |
+| `qlm build <source> --project <name> [--depth <n>] [--min-depth <n>]` | Generate or update project knowledge from source files. `--depth` caps the hierarchy depth (default 5); `--min-depth` sets the minimum document depth (default 1). Example: `qlm build ./docs --project product-notes --depth 4` |
 | `qlm project list [--json]` | List projects, optionally as JSON. Example: `qlm project list --json` |
 | `qlm project info <name>` | Show project details. Example: `qlm project info product-notes` |
 | `qlm project remove <name> --yes` | Remove a project after explicit confirmation. Example: `qlm project remove old-notes --yes` |

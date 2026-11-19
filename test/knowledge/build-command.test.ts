@@ -173,6 +173,32 @@ describe('qlm build command', () => {
     expect(result.exitCode).toBe(0);
   });
 
+  it('passes --depth and --min-depth to the hierarchy planner and rejects invalid values', async () => {
+    const { dataRoot } = createProject();
+    const sourcePath = createSourceFile();
+    const parsed = await new MarkdownDocumentParser().parse(loadMarkdownSources(sourcePath)[0]!);
+    const hierarchy = createHierarchy(parsed.sections.map(({ id }) => id));
+    const settings = settingsSchema.parse({ ai: { provider: 'openai', model: 'test-model' } });
+    const provider = new FakeBuildProvider(hierarchy);
+
+    const result = await runBuild(dataRoot, sourcePath, {
+      settings,
+      providerFactory: () => provider,
+      extraArgs: ['--depth', '4', '--min-depth', '1'],
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(provider.requests[0]?.prompt).toContain('between 1 and 4');
+
+    const untouched = new FakeBuildProvider(hierarchy);
+    for (const extraArgs of [['--depth', '0'], ['--depth', 'abc'], ['--depth', '2', '--min-depth', '3']]) {
+      const invalid = await runBuild(dataRoot, sourcePath, { settings, providerFactory: () => untouched, extraArgs });
+      expect(invalid.exitCode).toBe(1);
+      expect(invalid.errorOutput).toContain('Action:');
+    }
+    expect(untouched.requests).toHaveLength(0);
+  });
+
   it('honors the setting that disables response caching for sensitive sources', async () => {
     const { dataRoot } = createProject();
     const sourcePath = createSourceFile();
@@ -337,6 +363,7 @@ interface BuildRuntimeOptions {
   settings: ReturnType<typeof settingsSchema.parse>;
   providerFactory: (settings: ReturnType<typeof settingsSchema.parse>) => AIProvider;
   writeOutObserver?: (text: string) => void;
+  extraArgs?: string[];
 }
 
 async function runBuild(
@@ -347,7 +374,7 @@ async function runBuild(
   const output: string[] = [];
   const errorOutput: string[] = [];
   const exitCode = await runCli(
-    ['node', 'qlm', 'build', '--project', 'demo', sourcePath],
+    ['node', 'qlm', 'build', '--project', 'demo', ...(options.extraArgs ?? []), sourcePath],
     {
       writeOut: (text) => {
         output.push(text);
