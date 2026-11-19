@@ -3,10 +3,12 @@ import { InputError } from '../../src/errors/qlm-error.js';
 import {
   createHierarchyPlannerPrompt,
   HIERARCHY_PLANNER_SCHEMA,
+  normalizeHierarchyPaths,
   planKnowledgeHierarchy,
   type HierarchyNode,
   type HierarchyPlannerResponse,
 } from '../../src/knowledge/planner.js';
+import { validateKnowledgeHierarchy } from '../../src/knowledge/hierarchy-validator.js';
 import type { SourceSection } from '../../src/knowledge/source.js';
 import type {
   AIProvider,
@@ -146,5 +148,63 @@ describe('planKnowledgeHierarchy', () => {
       planKnowledgeHierarchy([section], { provider, model: '  ' }),
     ).rejects.toBeInstanceOf(InputError);
     expect(provider.requests).toEqual([]);
+  });
+});
+
+describe('hierarchy path normalization', () => {
+  const node = (overrides: Partial<HierarchyNode>): HierarchyNode => ({
+    id: 'n',
+    name: 'N',
+    type: 'document',
+    path: 'x.md',
+    description: 'd',
+    sourceSectionIds: [],
+    relatedDocumentIds: [],
+    children: [],
+    ...overrides,
+  });
+
+  it('nests leaf-only child paths under the parent and adds .md to documents', () => {
+    const result = normalizeHierarchyPaths([
+      node({
+        id: 'cat',
+        type: 'category',
+        path: 'guide',
+        children: [
+          node({ id: 'a', path: 'intro' }),
+          node({ id: 'b', path: String.raw`guide\setup.md` }),
+          node({ id: 'c', path: './guide/usage.md' }),
+        ],
+      }),
+    ]);
+
+    expect(result[0]?.path).toBe('guide');
+    expect(result[0]?.children?.map(({ path }) => path)).toEqual([
+      'guide/intro.md',
+      'guide/setup.md',
+      'guide/usage.md',
+    ]);
+  });
+
+  it('makes a leaf-only plan pass hierarchy validation', async () => {
+    const leafOnly: HierarchyNode[] = [node({
+      id: 'cat',
+      type: 'category',
+      path: 'overview',
+      sourceSectionIds: [],
+      children: [node({ id: 'doc', path: 'summary', sourceSectionIds: [section.id] })],
+    })];
+    const provider = new FakeProvider();
+    provider.generateStructured = async <T,>() => ({ hierarchy: leafOnly }) as T;
+
+    const planned = await planKnowledgeHierarchy([section], { provider, model: 'm' });
+    const result = validateKnowledgeHierarchy(planned, [section]);
+
+    expect(result.diagnostics).toEqual([]);
+    expect(result.valid).toBe(true);
+  });
+
+  it('tells the model how to build paths', () => {
+    expect(createHierarchyPlannerPrompt([section])).toContain('security/vm/create.md');
   });
 });

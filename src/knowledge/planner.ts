@@ -102,7 +102,36 @@ export async function planKnowledgeHierarchy(
     schemaName: 'qlm_knowledge_hierarchy',
     schema: HIERARCHY_PLANNER_SCHEMA,
   });
-  return response.hierarchy;
+  return normalizeHierarchyPaths(response.hierarchy);
+}
+
+/**
+ * Repairs common path mistakes before validation: backslashes, leading "./" or "/",
+ * a child path that omits its parent category, and document paths without .md.
+ */
+export function normalizeHierarchyPaths(
+  nodes: readonly HierarchyNode[],
+  parentPath?: string,
+): HierarchyNode[] {
+  return nodes.map((node) => {
+    let path = node.path
+      .trim()
+      .replace(/\\/gu, '/')
+      .replace(/\/{2,}/gu, '/')
+      .replace(/^(?:\.\/)+/u, '')
+      .replace(/^\/+|\/+$/gu, '');
+    if (parentPath !== undefined && !path.startsWith(`${parentPath}/`)) {
+      path = `${parentPath}/${path}`;
+    }
+    if (node.type === 'document' && !/\.(?:md|markdown)$/iu.test(path)) {
+      path = `${path}.md`;
+    }
+    return {
+      ...node,
+      path,
+      ...(node.children === undefined ? {} : { children: normalizeHierarchyPaths(node.children, path) }),
+    };
+  });
 }
 
 export function createHierarchyPlannerPrompt(
@@ -130,6 +159,7 @@ export function createHierarchyPlannerPrompt(
   return [
     'Organize the supplied source sections into a hierarchy of category and document nodes.',
     'Use portable relative paths with forward slashes; do not use absolute paths or parent traversal.',
+    'Every node path is the full path from the hierarchy root, one segment per depth level: a node at depth N has exactly N segments, and a child path starts with its parent path followed by "/". Category paths have no extension; document paths end in ".md". Example: category "security" (depth 1), category "security/vm" (depth 2), document "security/vm/create.md" (depth 3).',
     'Map every supplied source section ID to at least one document node.',
     'For each document node, set relatedDocumentIds to IDs of other related document nodes; use an empty array when there are none. Category nodes use an empty relatedDocumentIds array.',
     'Use concise descriptions that state each node purpose. Keep children as an empty array for leaf nodes.',
