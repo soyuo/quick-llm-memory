@@ -45,6 +45,24 @@ describe('qlm auth', () => {
     expect(result.out).toContain('claude: ENOENT');
   });
 
+  it('summarizes JSON status without exposing account details', async () => {
+    const runner: CliRunner = async () => ({
+      stdout: JSON.stringify({ loggedIn: true, authMethod: 'claude.ai', email: 'person@example.com', orgName: 'Secret Org' }, null, 2),
+      stderr: '',
+      exitCode: 0,
+    });
+
+    const result = await run(runner, 'status', 'claude');
+
+    expect(result.out).toBe('claude: logged in (claude.ai)\n');
+  });
+
+  it('reports a logged-out JSON status', async () => {
+    const runner: CliRunner = async () => ({ stdout: '{"loggedIn": false}', stderr: '', exitCode: 1 });
+
+    expect((await run(runner, 'status', 'claude')).out).toBe('claude: not logged in\n');
+  });
+
   it('fails when the vendor login does not complete', async () => {
     const runner: CliRunner = async () => ({ stdout: '', stderr: '', exitCode: 1 });
 
